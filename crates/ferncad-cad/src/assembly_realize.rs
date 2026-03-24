@@ -1,6 +1,6 @@
-//! アセンブリのメッシュ化
+//! Assembly mesh generation
 //!
-//! AssemblyDef をパーツごとの TriMesh に変換する。
+//! Converts an AssemblyDef into per-part TriMesh instances.
 
 use ferncad_core::assembly::AssemblyDef;
 use ferncad_core::error::{FernError, FernResult};
@@ -9,38 +9,38 @@ use crate::mesh::TriMesh;
 use crate::realize;
 use crate::transform;
 
-/// パーツごとのメッシュ情報
+/// Per-part mesh information
 #[derive(Debug, Clone)]
 pub struct PartMesh {
-    /// パーツインスタンス名
+    /// Part instance name
     pub name: String,
-    /// メッシュ
+    /// Mesh
     pub mesh: TriMesh,
-    /// 色 (RGB 0-1)
+    /// Color (RGB 0-1)
     pub color: [f64; 3],
 }
 
-/// アセンブリをパーツごとの TriMesh に変換する
+/// Convert an assembly into per-part TriMesh instances
 ///
-/// 各パーツインスタンスの ShapeNode を realize し、
-/// 変換行列を適用してパーツ名と色を付ける。
+/// Realizes each part instance's ShapeNode,
+/// applies the transform matrix, and attaches the part name and color.
 pub fn realize_assembly(assembly: &AssemblyDef) -> FernResult<Vec<PartMesh>> {
     let mut result = Vec::new();
 
     for part_instance in &assembly.parts {
-        // ShapeNode が設定されている場合は realize
+        // Realize ShapeNode if available
         let mesh = if let Some(shape) = &part_instance.shape {
             realize::realize(shape)?
         } else {
-            // shape がない場合は空メッシュ
+            // No shape -> empty mesh
             TriMesh::new()
         };
 
-        // 変換行列を適用
+        // Apply transform matrix
         let mut mesh = mesh;
         let t = &part_instance.transform;
 
-        // 4x4 行列からの平行移動（列優先）
+        // Translation from 4x4 matrix (column-major)
         let offset = [t[12], t[13], t[14]];
         if offset[0].abs() > 1e-10 || offset[1].abs() > 1e-10 || offset[2].abs() > 1e-10 {
             transform::translate(&mut mesh, offset);
@@ -56,7 +56,7 @@ pub fn realize_assembly(assembly: &AssemblyDef) -> FernResult<Vec<PartMesh>> {
     Ok(result)
 }
 
-/// ソースコードを評価し、アセンブリまたは単一形状のメッシュを返す
+/// Evaluate source code and return meshes for an assembly or single shape
 pub fn eval_and_realize_parts(source: &str) -> FernResult<Vec<PartMesh>> {
     let mut evaluator = ferncad_core::evaluator::Evaluator::new();
     let result = evaluator.eval_source(source)?;
@@ -73,8 +73,8 @@ pub fn eval_and_realize_parts(source: &str) -> FernResult<Vec<PartMesh>> {
         }
         _ => Err(FernError::CadError {
             message: format!(
-                "メッシュ化できません: 最後の式が形状またはアセンブリを返しませんでした（型: {}）",
-                result.type_name_ja()
+                "cannot convert to mesh: the last expression did not return a shape or assembly (type: {})",
+                result.type_name()
             ),
         }),
     }
@@ -104,15 +104,15 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].name, "plate");
         assert_eq!(parts[1].name, "pin");
-        // plate は box → 12 三角形
+        // plate is box -> 12 triangles
         assert_eq!(parts[0].mesh.triangle_count(), 12);
-        // pin は cylinder → 三角形 > 0
+        // pin is cylinder -> triangles > 0
         assert!(parts[1].mesh.triangle_count() > 0);
-        // pin の位置は Z=5 にオフセット
+        // pin should be offset at Z=5
         let (min, _) = parts[1].mesh.bounding_box();
         assert!(
             min[2] > -3.0,
-            "pin の min z = {}, Z=5 にオフセットされているはず",
+            "pin min z = {}, should be offset to Z=5",
             min[2]
         );
     }

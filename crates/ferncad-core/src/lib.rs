@@ -1,7 +1,7 @@
-//! ferncad コアライブラリ
+//! ferncad core library
 //!
-//! Lexer / Parser / Evaluator / 型定義を提供する。
-//! WASM 非依存の純粋な Rust ライブラリ。
+//! Provides the Lexer, Parser, Evaluator, and type definitions.
+//! A pure Rust library with no WASM dependencies.
 
 pub mod assembly;
 pub mod env;

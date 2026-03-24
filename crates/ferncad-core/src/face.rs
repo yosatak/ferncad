@@ -1,43 +1,43 @@
-//! 面・軸の参照型定義
+//! Face and axis reference type definitions
 //!
-//! defpart の `:faces` / `:axes` 宣言と、アセンブリ制約で使う参照型。
+//! Defines `:faces` / `:axes` declarations for defpart and reference types used in assembly constraints.
 
-/// パーツの名前付き面の仕様
+/// Named face specification for a part
 #[derive(Debug, Clone, PartialEq)]
 pub struct FaceSpec {
-    /// 面の名前
+    /// Face name
     pub name: String,
-    /// ドキュメント文字列
+    /// Documentation string
     pub doc: Option<String>,
-    /// 面の法線ベクトルのヒント（明示指定時）
+    /// Normal vector hint (when explicitly specified)
     pub normal: Option<[f64; 3]>,
 }
 
-/// パーツの名前付き軸の仕様
+/// Named axis specification for a part
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisSpec {
-    /// 軸の名前
+    /// Axis name
     pub name: String,
-    /// ドキュメント文字列
+    /// Documentation string
     pub doc: Option<String>,
-    /// 軸の方向ベクトルのヒント
+    /// Direction vector hint
     pub direction: Option<[f64; 3]>,
 }
 
-/// 面への参照（アセンブリ制約で使用）
+/// Face reference (used in assembly constraints)
 #[derive(Debug, Clone, PartialEq)]
 pub struct FaceRef {
-    /// パーツインスタンスの名前
+    /// Part instance name
     pub instance_name: String,
-    /// 面の名前
+    /// Face name
     pub face_name: String,
 }
 
-/// 軸への参照（アセンブリ制約で使用）
+/// Axis reference (used in assembly constraints)
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisRef {
-    /// パーツインスタンスの名前
+    /// Part instance name
     pub instance_name: String,
-    /// 軸の名前
+    /// Axis name
     pub axis_name: String,
 }

@@ -1,27 +1,27 @@
-//! BSP ツリーベースの CSG 演算
+//! BSP tree-based CSG operations
 //!
-//! csg.js (Evan Wallace) のアルゴリズムを Rust で実装。
-//! 三角形メッシュに対して union, difference, intersection を行う。
+//! A Rust implementation of the csg.js (Evan Wallace) algorithm.
+//! Performs union, difference, and intersection on triangle meshes.
 
 use crate::mesh::{cross, dot, lerp, normalize, scale_vec, sub, TriMesh};
 
-/// 分類の許容誤差
+/// Classification tolerance
 const EPSILON: f64 = 1e-5;
 
-/// 平面
+/// Plane
 #[derive(Debug, Clone)]
 struct Plane {
     normal: [f64; 3],
     w: f64,
 }
 
-/// ポリゴン（三角形）
+/// Polygon (triangle)
 #[derive(Debug, Clone)]
 struct Polygon {
     vertices: Vec<[f64; 3]>,
 }
 
-/// BSP ツリーノード
+/// BSP tree node
 #[derive(Debug, Clone)]
 struct BspNode {
     plane: Option<Plane>,
@@ -30,7 +30,7 @@ struct BspNode {
     polygons: Vec<Polygon>,
 }
 
-/// 頂点の平面に対する分類
+/// Classification of a vertex relative to a plane
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Classification {
     Coplanar = 0,
@@ -40,12 +40,12 @@ enum Classification {
 }
 
 impl Plane {
-    /// 3頂点から平面を作成する
+    /// Create a plane from 3 vertices
     fn from_points(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<Self> {
         let n = normalize(cross(sub(b, a), sub(c, a)));
         let len_sq = dot(n, n);
         if len_sq < 0.5 {
-            return None; // 退化三角形
+            return None; // degenerate triangle
         }
         Some(Self {
             normal: n,
@@ -53,7 +53,7 @@ impl Plane {
         })
     }
 
-    /// 平面を反転する
+    /// Flip the plane
     fn flip(&mut self) {
         self.normal = scale_vec(self.normal, -1.0);
         self.w = -self.w;
@@ -61,12 +61,12 @@ impl Plane {
 }
 
 impl Polygon {
-    /// ポリゴンを反転する（頂点順を逆にする）
+    /// Flip the polygon (reverse vertex order)
     fn flip(&mut self) {
         self.vertices.reverse();
     }
 
-    /// ポリゴンの平面を取得する
+    /// Get the plane of the polygon
     fn plane(&self) -> Option<Plane> {
         if self.vertices.len() < 3 {
             return None;
@@ -76,7 +76,7 @@ impl Polygon {
 }
 
 impl BspNode {
-    /// 空のノードを作成する
+    /// Create an empty node
     fn new() -> Self {
         Self {
             plane: None,
@@ -86,7 +86,7 @@ impl BspNode {
         }
     }
 
-    /// ポリゴンリストから BSP ツリーを構築する
+    /// Build a BSP tree from a list of polygons
     fn build(polygons: Vec<Polygon>) -> Option<Self> {
         if polygons.is_empty() {
             return None;
@@ -96,17 +96,17 @@ impl BspNode {
         Some(node)
     }
 
-    /// ポリゴンを追加する
+    /// Add polygons to the tree
     fn add_polygons(&mut self, polygons: Vec<Polygon>) {
         if polygons.is_empty() {
             return;
         }
 
         if self.plane.is_none() {
-            // 最初のポリゴンの平面を分割平面とする
+            // Use the first polygon's plane as the splitting plane
             self.plane = polygons[0].plane();
             if self.plane.is_none() {
-                // 退化ポリゴンをスキップして次を試す
+                // Skip degenerate polygon and try the next one
                 for p in &polygons {
                     if let Some(plane) = p.plane() {
                         self.plane = Some(plane);
@@ -136,7 +136,7 @@ impl BspNode {
             );
         }
 
-        // coplanar ポリゴンはこのノードに格納
+        // Store coplanar polygons in this node
         self.polygons.extend(coplanar_front);
         self.polygons.extend(coplanar_back);
 
@@ -155,7 +155,7 @@ impl BspNode {
         }
     }
 
-    /// すべてのポリゴンを収集する
+    /// Collect all polygons
     fn all_polygons(&self) -> Vec<Polygon> {
         let mut result = self.polygons.clone();
         if let Some(front) = &self.front {
@@ -167,7 +167,7 @@ impl BspNode {
         result
     }
 
-    /// ツリーを反転する
+    /// Invert the tree
     fn invert(&mut self) {
         for poly in &mut self.polygons {
             poly.flip();
@@ -184,7 +184,7 @@ impl BspNode {
         std::mem::swap(&mut self.front, &mut self.back);
     }
 
-    /// このツリーの内側にあるポリゴンを除去する
+    /// Remove polygons that are inside this tree
     fn clip_polygons(&self, polygons: &[Polygon]) -> Vec<Polygon> {
         if self.plane.is_none() {
             return polygons.to_vec();
@@ -218,7 +218,7 @@ impl BspNode {
         let back = if let Some(b) = &self.back {
             b.clip_polygons(&back)
         } else {
-            Vec::new() // 後方にツリーがない → 後方のポリゴンは削除
+            Vec::new() // no back tree -> discard back polygons
         };
 
         let mut result = front;
@@ -226,7 +226,7 @@ impl BspNode {
         result
     }
 
-    /// 他のツリーでクリップする
+    /// Clip this tree against another tree
     fn clip_to(&mut self, other: &BspNode) {
         self.polygons = other.clip_polygons(&self.polygons);
         if let Some(front) = &mut self.front {
@@ -238,7 +238,7 @@ impl BspNode {
     }
 }
 
-/// ポリゴンを平面で分割する
+/// Split a polygon by a plane
 fn split_polygon(
     plane: &Plane,
     polygon: Polygon,
@@ -274,7 +274,7 @@ fn split_polygon(
         Ok(Classification::Front) => front.push(polygon),
         Ok(Classification::Back) => back.push(polygon),
         _ => {
-            // Spanning: ポリゴンを分割
+            // Spanning: split the polygon
             let mut f_verts = Vec::new();
             let mut b_verts = Vec::new();
             let n = polygon.vertices.len();
@@ -294,7 +294,7 @@ fn split_polygon(
                 }
 
                 if (ti as u8 | tj as u8) == Classification::Spanning as u8 {
-                    // 交点を計算
+                    // Compute intersection point
                     let t = (plane.w - dot(plane.normal, vi)) / dot(plane.normal, sub(vj, vi));
                     let v = lerp(vi, vj, t);
                     f_verts.push(v);
@@ -303,7 +303,7 @@ fn split_polygon(
             }
 
             if f_verts.len() >= 3 {
-                // ファンで三角形分割
+                // Triangulate using fan
                 for polys in triangulate(&f_verts) {
                     front.push(polys);
                 }
@@ -330,7 +330,7 @@ impl TryFrom<u8> for Classification {
     }
 }
 
-/// 多角形を三角形ファンで分割する
+/// Triangulate a polygon using a triangle fan
 fn triangulate(vertices: &[[f64; 3]]) -> Vec<Polygon> {
     let mut result = Vec::new();
     for i in 1..vertices.len() - 1 {
@@ -341,9 +341,9 @@ fn triangulate(vertices: &[[f64; 3]]) -> Vec<Polygon> {
     result
 }
 
-// === TriMesh ↔ Polygon 変換 ===
+// === TriMesh <-> Polygon conversion ===
 
-/// TriMesh をポリゴンリストに変換する
+/// Convert a TriMesh to a list of polygons
 fn mesh_to_polygons(mesh: &TriMesh) -> Vec<Polygon> {
     mesh.triangles
         .iter()
@@ -357,7 +357,7 @@ fn mesh_to_polygons(mesh: &TriMesh) -> Vec<Polygon> {
         .collect()
 }
 
-/// ポリゴンリストを TriMesh に変換する
+/// Convert a list of polygons to a TriMesh
 fn polygons_to_mesh(polygons: &[Polygon]) -> TriMesh {
     let mut mesh = TriMesh::new();
     for poly in polygons {
@@ -366,7 +366,7 @@ fn polygons_to_mesh(polygons: &[Polygon]) -> TriMesh {
         }
         let base = mesh.vertices.len();
         mesh.vertices.extend_from_slice(&poly.vertices);
-        // ファンで三角形化
+        // Triangulate using fan
         for i in 1..poly.vertices.len() - 1 {
             mesh.triangles.push([base, base + i, base + i + 1]);
         }
@@ -374,7 +374,7 @@ fn polygons_to_mesh(polygons: &[Polygon]) -> TriMesh {
     mesh
 }
 
-// === 公開 CSG 演算 ===
+// === Public CSG operations ===
 
 /// CSG union (A ∪ B)
 pub fn csg_union(a: &TriMesh, b: &TriMesh) -> TriMesh {
@@ -467,13 +467,13 @@ mod tests {
     fn test_union_non_overlapping() {
         let a = generate_box(10.0, 10.0, 10.0);
         let mut b = generate_box(10.0, 10.0, 10.0);
-        // b を右に移動
+        // Move b to the right
         for v in &mut b.vertices {
             v[0] += 20.0;
         }
         let result = csg_union(&a, &b);
         assert!(result.triangle_count() > 0);
-        // 非重複なので三角形数は a + b
+        // Non-overlapping, so triangle count is a + b
         assert_eq!(
             result.triangle_count(),
             a.triangle_count() + b.triangle_count()
@@ -484,7 +484,7 @@ mod tests {
     fn test_union_overlapping() {
         let a = generate_box(10.0, 10.0, 10.0);
         let mut b = generate_box(10.0, 10.0, 10.0);
-        // b を少し右に移動（重なる）
+        // Move b slightly to the right (overlapping)
         for v in &mut b.vertices {
             v[0] += 5.0;
         }
@@ -498,7 +498,7 @@ mod tests {
         let b = generate_box(10.0, 10.0, 10.0);
         let result = csg_difference(&a, &b);
         assert!(result.triangle_count() > 0);
-        // difference は元より多い三角形が生まれるはず
+        // Difference should produce more triangles than the original
         assert!(result.triangle_count() > a.triangle_count());
     }
 

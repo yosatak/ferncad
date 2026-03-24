@@ -1,7 +1,7 @@
-//! ferncad 評価器（Evaluator）
+//! ferncad evaluator
 //!
-//! ツリーウォーク型インタープリタ。
-//! S式（`Value`）を評価し、結果の `Value` を返す。
+//! A tree-walk interpreter.
+//! Evaluates S-expressions (`Value`) and returns the resulting `Value`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,18 +14,18 @@ use crate::types::{
     BuiltinFnDef, LambdaDef, ParamSpec, PartDef, ShapeNode, Value, DEFAULT_SEGMENTS,
 };
 
-/// 評価器
+/// Evaluator
 pub struct Evaluator {
-    /// グローバル環境
+    /// Global environment
     env: Rc<RefCell<Env>>,
-    /// 環境マップ（ID → 環境参照、クロージャ用）
+    /// Environment map (ID -> environment reference, for closures)
     env_map: HashMap<usize, Rc<RefCell<Env>>>,
-    /// モジュールローダー
+    /// Module loader
     module_loader: crate::module::ModuleLoader,
 }
 
 impl Evaluator {
-    /// 新しい評価器を作成し、組み込み関数を登録する
+    /// Create a new evaluator and register built-in functions
     pub fn new() -> Self {
         let env = Env::new_global();
         let mut evaluator = Self {
@@ -38,13 +38,13 @@ impl Evaluator {
         evaluator
     }
 
-    /// 環境を環境マップに登録する
+    /// Register an environment in the environment map
     fn register_env(&mut self, env: Rc<RefCell<Env>>) {
         let id = env.borrow().id;
         self.env_map.insert(id, env);
     }
 
-    /// ソースコードを評価する
+    /// Evaluate source code
     pub fn eval_source(&mut self, source: &str) -> FernResult<Value> {
         let exprs = crate::parser::parse(source)?;
         let mut result = Value::Nil;
@@ -54,7 +54,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// 式を評価する
+    /// Evaluate an expression
     pub fn eval(&mut self, expr: &Value, env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         match expr {
@@ -82,11 +82,11 @@ impl Evaluator {
         }
     }
 
-    /// リスト（関数呼び出しまたはスペシャルフォーム）を評価する
+    /// Evaluate a list (function call or special form)
     fn eval_list(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
 
-        // スペシャルフォームのチェック
+        // Check for special forms
         if let Value::Symbol(name) = &items[0] {
             match name.as_str() {
                 "defvar" => return self.eval_defvar(items, env),
@@ -95,7 +95,7 @@ impl Evaluator {
                 "defmeta" => return self.eval_defmeta(items, env),
                 "assembly" => return self.eval_assembly(items, env),
                 "require" => return self.eval_require(items, env),
-                "export" => return Ok(Value::Nil), // export は現在メタデータのみ
+                "export" => return Ok(Value::Nil), // export is currently metadata-only
                 "let*" => return self.eval_let_star(items, env),
                 "if" => return self.eval_if(items, env),
                 "lambda" => return self.eval_lambda(items, env),
@@ -106,13 +106,13 @@ impl Evaluator {
             }
         }
 
-        // 関数呼び出し
+        // Function call
         let func = self.eval(&items[0], env)?;
         let args = &items[1..];
 
         match func {
             Value::BuiltinFn(def) => {
-                // 組み込み関数: まず引数を評価
+                // Built-in function: evaluate arguments first
                 let evaluated_args = self.eval_args(args, env)?;
                 (def.func)(&evaluated_args, &loc)
             }
@@ -121,28 +121,28 @@ impl Evaluator {
             _ => Err(FernError::EvalError {
                 loc,
                 message: format!(
-                    "`{}` は関数として呼び出せません（型: {}）",
+                    "`{}` is not callable (type: {})",
                     items[0],
-                    func.type_name_ja()
+                    func.type_name()
                 ),
             }),
         }
     }
 
-    /// 引数リストを評価する
+    /// Evaluate an argument list
     fn eval_args(&mut self, args: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Vec<Value>> {
         args.iter().map(|arg| self.eval(arg, env)).collect()
     }
 
-    // === スペシャルフォーム ===
+    // === Special Forms ===
 
-    /// `(defvar name value)` を評価する
+    /// Evaluate `(defvar name value)`
     fn eval_defvar(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() != 3 {
             return Err(FernError::EvalError {
                 loc,
-                message: "defvar は (defvar 名前 値) の形式が必要です".to_string(),
+                message: "`defvar` requires (defvar name value) form".to_string(),
             });
         }
         let name = match &items[1] {
@@ -150,7 +150,7 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: "defvar の第1引数はシンボルが必要です".to_string(),
+                    message: "`defvar` first argument must be a symbol".to_string(),
                 });
             }
         };
@@ -159,13 +159,13 @@ impl Evaluator {
         Ok(value)
     }
 
-    /// `(defun name (params...) body...)` を評価する
+    /// Evaluate `(defun name (params...) body...)`
     fn eval_defun(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 4 {
             return Err(FernError::EvalError {
                 loc,
-                message: "defun は (defun 名前 (引数...) 本体...) の形式が必要です".to_string(),
+                message: "`defun` requires (defun name (params...) body...) form".to_string(),
             });
         }
 
@@ -174,12 +174,12 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: "defun の第1引数はシンボルが必要です".to_string(),
+                    message: "`defun` first argument must be a symbol".to_string(),
                 });
             }
         };
 
-        // docstring があるかチェック（第3引数が文字列の場合）
+        // Check for docstring (if third argument is a string)
         let (params_idx, body_start) = if items.len() > 4 {
             if let Value::Str(_) = &items[3] {
                 // (defun name (params) "docstring" body...)
@@ -193,7 +193,7 @@ impl Evaluator {
 
         let params = self.extract_param_names(&items[params_idx])?;
 
-        // :: 型アノテーション付きのパラメータをフィルタ
+        // Filter out :: type annotations from parameters
         let params = filter_type_annotations(&params);
 
         let body = items[body_start..].to_vec();
@@ -209,13 +209,13 @@ impl Evaluator {
         Ok(lambda)
     }
 
-    /// `(let* ((var1 val1) (var2 val2) ...) body...)` を評価する
+    /// Evaluate `(let* ((var1 val1) (var2 val2) ...) body...)`
     fn eval_let_star(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 3 {
             return Err(FernError::EvalError {
                 loc,
-                message: "let* は (let* ((変数 値)...) 本体...) の形式が必要です".to_string(),
+                message: "`let*` requires (let* ((var val)...) body...) form".to_string(),
             });
         }
 
@@ -224,7 +224,7 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: "let* の第1引数はバインディングリストが必要です".to_string(),
+                    message: "`let*` first argument must be a binding list".to_string(),
                 });
             }
         };
@@ -240,12 +240,12 @@ impl Evaluator {
                         _ => {
                             return Err(FernError::EvalError {
                                 loc,
-                                message: "let* のバインディングの変数名はシンボルが必要です"
+                                message: "`let*` binding variable name must be a symbol"
                                     .to_string(),
                             });
                         }
                     };
-                    // :: 型アノテーションをスキップ
+                    // Skip :: type annotation
                     let val_idx = find_value_index_after_annotation(pair);
                     let value = self.eval(&pair[val_idx], &child_env)?;
                     child_env.borrow_mut().define(name, value);
@@ -253,13 +253,13 @@ impl Evaluator {
                 _ => {
                     return Err(FernError::EvalError {
                         loc,
-                        message: "let* のバインディングは (変数 値) の形式が必要です".to_string(),
+                        message: "`let*` binding must be (variable value) form".to_string(),
                     });
                 }
             }
         }
 
-        // body を逐次評価
+        // Evaluate body sequentially
         let mut result = Value::Nil;
         for expr in &items[2..] {
             result = self.eval(expr, &child_env)?;
@@ -267,13 +267,13 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// `(if test then else?)` を評価する
+    /// Evaluate `(if test then else?)`
     fn eval_if(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 3 {
             return Err(FernError::EvalError {
                 loc,
-                message: "if は (if 条件 真の値 偽の値?) の形式が必要です".to_string(),
+                message: "`if` requires (if condition then-expr else-expr?) form".to_string(),
             });
         }
 
@@ -287,13 +287,13 @@ impl Evaluator {
         }
     }
 
-    /// `(lambda (params...) body...)` を評価する
+    /// Evaluate `(lambda (params...) body...)`
     fn eval_lambda(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 3 {
             return Err(FernError::EvalError {
                 loc,
-                message: "lambda は (lambda (引数...) 本体...) の形式が必要です".to_string(),
+                message: "`lambda` requires (lambda (params...) body...) form".to_string(),
             });
         }
 
@@ -310,19 +310,19 @@ impl Evaluator {
         })))
     }
 
-    /// `(quote expr)` を評価する
+    /// Evaluate `(quote expr)`
     fn eval_quote(&mut self, items: &[Value]) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() != 2 {
             return Err(FernError::EvalError {
                 loc,
-                message: "quote は (quote 式) の形式が必要です".to_string(),
+                message: "`quote` requires (quote expr) form".to_string(),
             });
         }
         Ok(items[1].clone())
     }
 
-    /// `(progn body...)` を評価する
+    /// Evaluate `(progn body...)`
     fn eval_progn(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let mut result = Value::Nil;
         for expr in &items[1..] {
@@ -331,7 +331,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// `(cond (test1 expr1) (test2 expr2) ...)` を評価する
+    /// Evaluate `(cond (test1 expr1) (test2 expr2) ...)`
     fn eval_cond(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         for clause in &items[1..] {
             match clause {
@@ -348,7 +348,7 @@ impl Evaluator {
                 _ => {
                     return Err(FernError::EvalError {
                         loc: SourceLocation { line: 0, col: 0 },
-                        message: "cond の各節は (条件 式...) の形式が必要です".to_string(),
+                        message: "`cond` clause must be (condition expr...) form".to_string(),
                     });
                 }
             }
@@ -356,13 +356,15 @@ impl Evaluator {
         Ok(Value::Nil)
     }
 
-    /// `(defpart name "doc" :meta (...) :params (...) :body expr)` を評価する
+    /// Evaluate `(defpart name "doc" :meta (...) :params (...) :body expr)`
     fn eval_defpart(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 4 {
             return Err(FernError::EvalError {
                 loc,
-                message: "defpart は (defpart 名前 \"doc\" :meta ... :params ... :body ...) の形式が必要です".to_string(),
+                message:
+                    "`defpart` requires (defpart name \"doc\" :meta ... :params ... :body ...) form"
+                        .to_string(),
             });
         }
 
@@ -371,7 +373,7 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: "defpart の第1引数はシンボルが必要です".to_string(),
+                    message: "`defpart` first argument must be a symbol".to_string(),
                 });
             }
         };
@@ -381,7 +383,7 @@ impl Evaluator {
             _ => String::new(),
         };
 
-        // キーワード引数をパース
+        // Parse keyword arguments
         let kw_start = if items.get(2).is_some_and(|v| matches!(v, Value::Str(_))) {
             3
         } else {
@@ -453,7 +455,7 @@ impl Evaluator {
         Ok(part_def)
     }
 
-    /// メタデータリストをパースする
+    /// Parse a metadata list
     fn parse_meta(&self, expr: &Value) -> FernResult<HashMap<String, Value>> {
         let mut meta = HashMap::new();
         if let Value::List(items) = expr {
@@ -472,7 +474,7 @@ impl Evaluator {
         Ok(meta)
     }
 
-    /// パラメータ仕様リストをパースする
+    /// Parse a parameter specification list
     fn parse_param_specs(&self, expr: &Value) -> FernResult<Vec<ParamSpec>> {
         let loc = SourceLocation { line: 0, col: 0 };
         let specs_list = match expr {
@@ -480,7 +482,7 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: ":params はリストが必要です".to_string(),
+                    message: "`:params` requires a list".to_string(),
                 });
             }
         };
@@ -547,7 +549,7 @@ impl Evaluator {
         Ok(specs)
     }
 
-    /// `:faces` 仕様をパースする
+    /// Parse `:faces` specifications
     fn parse_face_specs(&self, expr: &Value) -> FernResult<Vec<crate::face::FaceSpec>> {
         let items = match expr {
             Value::List(items) => items,
@@ -575,7 +577,7 @@ impl Evaluator {
         Ok(specs)
     }
 
-    /// `:axes` 仕様をパースする
+    /// Parse `:axes` specifications
     fn parse_axis_specs(&self, expr: &Value) -> FernResult<Vec<crate::face::AxisSpec>> {
         let items = match expr {
             Value::List(items) => items,
@@ -603,7 +605,7 @@ impl Evaluator {
         Ok(specs)
     }
 
-    /// `(defmeta :key val ...)` を評価する
+    /// Evaluate `(defmeta :key val ...)`
     fn eval_defmeta(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let meta = self.parse_meta(&Value::List(items[1..].to_vec()))?;
         let meta_value = Value::List(
@@ -616,15 +618,15 @@ impl Evaluator {
         Ok(meta_value)
     }
 
-    /// `(require :module-name)` を評価する
+    /// Evaluate `(require :module-name)`
     ///
-    /// 埋め込み標準ライブラリからモジュールを検索し、現在の環境で評価する。
+    /// Searches for a module in the embedded standard library and evaluates it in the current environment.
     fn eval_require(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 2 {
             return Err(FernError::EvalError {
                 loc,
-                message: "require は (require :モジュール名) の形式が必要です".to_string(),
+                message: "`require` requires (require :module-name) form".to_string(),
             });
         }
 
@@ -634,28 +636,28 @@ impl Evaluator {
             _ => {
                 return Err(FernError::EvalError {
                     loc,
-                    message: "require の引数はキーワードまたは文字列が必要です".to_string(),
+                    message: "`require` argument must be a keyword or string".to_string(),
                 });
             }
         };
 
-        // 既に読み込み済みならスキップ
+        // Skip if already loaded
         if self.module_loader.is_loaded(&module_name) {
             return Ok(Value::Nil);
         }
 
-        // 埋め込みモジュールを検索
+        // Search for embedded module
         let source = crate::module::ModuleLoader::find_builtin(&module_name).ok_or_else(|| {
             FernError::EvalError {
                 loc: loc.clone(),
                 message: format!(
-                    "モジュール `{module_name}` が見つかりません。利用可能なモジュール: {:?}",
+                    "module `{module_name}` not found. Available modules: {:?}",
                     crate::module::ModuleLoader::available_modules()
                 ),
             }
         })?;
 
-        // モジュールを評価
+        // Evaluate the module
         let exprs = crate::parser::parse(source)?;
         for expr in &exprs {
             self.eval(expr, env)?;
@@ -665,24 +667,24 @@ impl Evaluator {
         Ok(Value::Nil)
     }
 
-    /// `(assembly "name" "doc" (place ...) (place ...) (mate ...) ...)` を評価する
+    /// Evaluate `(assembly "name" "doc" (place ...) (place ...) (mate ...) ...)`
     fn eval_assembly(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 2 {
             return Err(FernError::EvalError {
                 loc,
-                message: "assembly は (assembly \"名前\" ...) の形式が必要です".to_string(),
+                message: "`assembly` requires (assembly \"name\" ...) form".to_string(),
             });
         }
 
-        // 名前（文字列）
+        // Name (string)
         let name = match &items[1] {
             Value::Str(s) => s.clone(),
             Value::Symbol(s) => s.clone(),
             _ => "unnamed".to_string(),
         };
 
-        // docstring（オプション）
+        // Docstring (optional)
         let (docstring, body_start) = if items.len() > 2 && matches!(&items[2], Value::Str(_)) {
             match &items[2] {
                 Value::Str(s) => (s.clone(), 3),
@@ -692,21 +694,21 @@ impl Evaluator {
             (String::new(), 2)
         };
 
-        // アセンブリスコープ環境
+        // Assembly scope environment
         let asm_env = Env::new_child(Rc::clone(env));
         self.register_env(Rc::clone(&asm_env));
 
         let mut parts = Vec::new();
         let mut constraints = Vec::new();
 
-        // 本体の各式を評価
+        // Evaluate each expression in the body
         for expr in &items[body_start..] {
             let result = self.eval(expr, &asm_env)?;
 
-            // place の結果をパーツとして収集
+            // Collect place results as parts
             if let Value::List(ref list) = result {
                 if list.len() >= 2 && matches!(&list[0], Value::Keyword(_)) {
-                    // place 結果: [name_keyword, shape, nil, position]
+                    // place result: [name_keyword, shape, nil, position]
                     if let Some(pi) = self.extract_part_instance(list, env)? {
                         parts.push(pi);
                         continue;
@@ -714,13 +716,13 @@ impl Evaluator {
                 }
             }
 
-            // 制約値を収集
+            // Collect constraint values
             if let Some(constraint) = self.try_extract_constraint(&result) {
                 constraints.push(constraint);
             }
         }
 
-        // 色の自動割り当て
+        // Auto-assign colors
         for (i, part) in parts.iter_mut().enumerate() {
             part.color = crate::assembly::part_color(i);
         }
@@ -735,7 +737,7 @@ impl Evaluator {
         Ok(Value::Assembly(Arc::new(assembly)))
     }
 
-    /// 制約値から Constraint を抽出する
+    /// Extract a Constraint from a constraint value
     fn try_extract_constraint(&self, value: &Value) -> Option<crate::assembly::Constraint> {
         match value {
             Value::List(items) if items.len() >= 2 => {
@@ -771,7 +773,7 @@ impl Evaluator {
         }
     }
 
-    /// パーツデータリストから PartInstance を作成する
+    /// Create a PartInstance from part data list
     fn extract_part_instance(
         &mut self,
         data: &[Value],
@@ -816,7 +818,7 @@ impl Evaluator {
         let mut instance = crate::assembly::PartInstance::new(name, dummy_part_def, HashMap::new());
         instance.shape = shape;
 
-        // 初期位置
+        // Initial position
         if let Some(Value::Point3(p)) = data.get(3) {
             instance.translate(*p);
         }
@@ -824,7 +826,7 @@ impl Evaluator {
         Ok(Some(instance))
     }
 
-    /// Lambda をパラメータに適用する
+    /// Apply a Lambda to arguments
     fn apply_lambda(
         &mut self,
         lambda: &LambdaDef,
@@ -833,26 +835,26 @@ impl Evaluator {
     ) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
 
-        // クロージャの定義時環境を取得
+        // Get the closure's definition-time environment
         let closure_env = self
             .env_map
             .get(&lambda.env_id)
             .ok_or_else(|| FernError::EvalError {
                 loc: loc.clone(),
-                message: "関数のクロージャ環境が見つかりません".to_string(),
+                message: "closure environment for function not found".to_string(),
             })?
             .clone();
 
         let func_env = Env::new_child(closure_env);
         self.register_env(Rc::clone(&func_env));
 
-        // 引数を評価してバインド
+        // Evaluate and bind arguments
         let evaluated_args = self.eval_keyword_args(args, call_env)?;
 
-        // 位置引数とキーワード引数を分離
+        // Separate positional and keyword arguments
         let (positional, kwargs) = split_kwargs(&evaluated_args);
 
-        // 位置引数のバインド
+        // Bind positional arguments
         for (i, param) in lambda.params.iter().enumerate() {
             if let Some(value) = kwargs.get(param) {
                 func_env.borrow_mut().define(param.clone(), value.clone());
@@ -861,12 +863,12 @@ impl Evaluator {
             } else {
                 return Err(FernError::EvalError {
                     loc,
-                    message: format!("引数 `{param}` に値が渡されていません"),
+                    message: format!("no value provided for argument `{param}`"),
                 });
             }
         }
 
-        // body を逐次評価
+        // Evaluate body sequentially
         let mut result = Value::Nil;
         for expr in &lambda.body {
             result = self.eval(expr, &func_env)?;
@@ -874,7 +876,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// PartDef をインスタンス化する
+    /// Instantiate a PartDef
     fn apply_part(
         &mut self,
         part: &PartDef,
@@ -883,24 +885,24 @@ impl Evaluator {
     ) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
 
-        // 定義時環境を取得
+        // Get the definition-time environment
         let closure_env = self
             .env_map
             .get(&part.env_id)
             .ok_or_else(|| FernError::EvalError {
                 loc: loc.clone(),
-                message: "パーツのクロージャ環境が見つかりません".to_string(),
+                message: "closure environment for part not found".to_string(),
             })?
             .clone();
 
         let part_env = Env::new_child(closure_env);
         self.register_env(Rc::clone(&part_env));
 
-        // キーワード引数を評価
+        // Evaluate keyword arguments
         let evaluated_args = self.eval_keyword_args(args, call_env)?;
         let (_, kwargs) = split_kwargs(&evaluated_args);
 
-        // パラメータをバインド（キーワード引数 or デフォルト値）
+        // Bind parameters (keyword arguments or default values)
         for param in &part.params {
             let value = if let Some(v) = kwargs.get(&param.name) {
                 v.clone()
@@ -910,25 +912,25 @@ impl Evaluator {
                 return Err(FernError::EvalError {
                     loc: loc.clone(),
                     message: format!(
-                        "パーツ `{}` のパラメータ `{}` に値が渡されていません（デフォルト値もありません）",
+                        "part `{}` parameter `{}` has no value and no default",
                         part.name, param.name
                     ),
                 });
             };
-            // 型アノテーションがある場合はチェック
+            // Check type annotation if present
             if let Some(ref type_name) = param.type_annotation {
                 if !value.matches_type(type_name) {
                     return Err(FernError::TypeError {
                         loc: loc.clone(),
                         expected: type_name.clone(),
-                        actual: value.type_name_ja().to_string(),
+                        actual: value.type_name().to_string(),
                     });
                 }
             }
             part_env.borrow_mut().define(param.name.clone(), value);
         }
 
-        // body を評価
+        // Evaluate body
         let mut result = Value::Nil;
         for expr in &part.body {
             result = self.eval(expr, &part_env)?;
@@ -936,7 +938,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// キーワード引数を含む引数リストを評価する
+    /// Evaluate an argument list that may contain keyword arguments
     fn eval_keyword_args(
         &mut self,
         args: &[Value],
@@ -949,7 +951,7 @@ impl Evaluator {
         Ok(result)
     }
 
-    /// パラメータリストから名前を抽出する
+    /// Extract parameter names from a parameter list
     fn extract_param_names(&self, expr: &Value) -> FernResult<Vec<String>> {
         let loc = SourceLocation { line: 0, col: 0 };
         match expr {
@@ -964,48 +966,48 @@ impl Evaluator {
             }
             _ => Err(FernError::EvalError {
                 loc,
-                message: "パラメータリストが必要です".to_string(),
+                message: "parameter list required".to_string(),
             }),
         }
     }
 
-    // === 組み込み関数登録 ===
+    // === Built-in function registration ===
 
-    /// すべての組み込み関数を登録する
+    /// Register all built-in functions
     fn register_builtins(&mut self) {
-        // 算術
+        // Arithmetic
         self.register_builtin("+", builtin_add);
         self.register_builtin("-", builtin_sub);
         self.register_builtin("*", builtin_mul);
         self.register_builtin("/", builtin_div);
 
-        // 比較
+        // Comparison
         self.register_builtin("=", builtin_eq);
         self.register_builtin("<", builtin_lt);
         self.register_builtin(">", builtin_gt);
         self.register_builtin("<=", builtin_le);
         self.register_builtin(">=", builtin_ge);
 
-        // 論理
+        // Logic
         self.register_builtin("not", builtin_not);
 
-        // リスト
+        // List
         self.register_builtin("list", builtin_list);
 
-        // 数学
+        // Math
         self.register_builtin("cos", builtin_cos);
         self.register_builtin("sin", builtin_sin);
         self.register_builtin("sqrt", builtin_sqrt);
 
-        // 定数
+        // Constants
         self.env
             .borrow_mut()
             .define("pi".to_string(), Value::Float(std::f64::consts::PI));
 
-        // デバッグ
+        // Debug
         self.register_builtin("print", builtin_print);
 
-        // CAD プリミティブ
+        // CAD primitives
         self.register_builtin("box", builtin_box);
         self.register_builtin("cube", builtin_cube);
         self.register_builtin("sphere", builtin_sphere);
@@ -1019,30 +1021,30 @@ impl Evaluator {
         self.register_builtin("difference", builtin_difference);
         self.register_builtin("intersection", builtin_intersection);
 
-        // 変換
+        // Transforms
         self.register_builtin("translate", builtin_translate);
         self.register_builtin("rotate", builtin_rotate);
         self.register_builtin("scale", builtin_scale);
 
-        // 単位変換
+        // Unit conversion
         self.register_builtin("to-mm", builtin_to_mm);
         self.register_builtin("to-rad", builtin_to_rad);
 
-        // 面・軸参照
+        // Face/axis references
         self.register_builtin("face", builtin_face);
         self.register_builtin("axis", builtin_axis);
 
-        // アセンブリ
+        // Assembly
         self.register_builtin("place", builtin_place);
 
-        // 制約（アセンブリ内で使用）
+        // Constraints (used within assemblies)
         self.register_builtin("mate", builtin_mate);
         self.register_builtin("align-axis", builtin_align_axis);
         self.register_builtin("fit", builtin_fit);
         self.register_builtin("joint", builtin_joint);
     }
 
-    /// 組み込み関数を登録する
+    /// Register a built-in function
     fn register_builtin(
         &self,
         name: &str,
@@ -1057,7 +1059,7 @@ impl Evaluator {
         );
     }
 
-    /// グローバル環境への参照を取得する
+    /// Get a reference to the global environment
     pub fn global_env(&self) -> &Rc<RefCell<Env>> {
         &self.env
     }
@@ -1069,15 +1071,15 @@ impl Default for Evaluator {
     }
 }
 
-// === ヘルパー関数 ===
+// === Helper functions ===
 
-/// :: 型アノテーションをフィルタする
+/// Filter out :: type annotations
 fn filter_type_annotations(params: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut i = 0;
     while i < params.len() {
         if params[i] == "::" {
-            // :: の次の型名もスキップ
+            // Skip :: and the following type name
             i += 2;
         } else {
             result.push(params[i].clone());
@@ -1087,10 +1089,10 @@ fn filter_type_annotations(params: &[String]) -> Vec<String> {
     result
 }
 
-/// let* バインディングで :: 型アノテーション後の値インデックスを見つける
+/// Find the value index after :: type annotation in a let* binding
 fn find_value_index_after_annotation(pair: &[Value]) -> usize {
-    // (name :: type value) → value は index 3
-    // (name value) → value は index 1
+    // (name :: type value) -> value is at index 3
+    // (name value) -> value is at index 1
     if pair.len() >= 4 {
         if let Value::Symbol(s) = &pair[1] {
             if s == "::" {
@@ -1101,7 +1103,7 @@ fn find_value_index_after_annotation(pair: &[Value]) -> usize {
     1
 }
 
-/// 評価済み引数からキーワード引数を分離する
+/// Separate keyword arguments from evaluated arguments
 fn split_kwargs(args: &[Value]) -> (Vec<Value>, HashMap<String, Value>) {
     let mut positional = Vec::new();
     let mut kwargs = HashMap::new();
@@ -1120,7 +1122,7 @@ fn split_kwargs(args: &[Value]) -> (Vec<Value>, HashMap<String, Value>) {
     (positional, kwargs)
 }
 
-/// キーワード引数から値を取得するヘルパー
+/// Helper to get an f64 value from keyword arguments
 fn get_kwarg_f64(
     kwargs: &HashMap<String, Value>,
     key: &str,
@@ -1131,15 +1133,15 @@ fn get_kwarg_f64(
             Some(n) => Ok(Some(n)),
             None => Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "数値".to_string(),
-                actual: v.type_name_ja().to_string(),
+                expected: "number".to_string(),
+                actual: v.type_name().to_string(),
             }),
         },
         None => Ok(None),
     }
 }
 
-/// 必須キーワード引数の f64 値を取得する
+/// Get a required f64 keyword argument
 fn require_kwarg_f64(
     kwargs: &HashMap<String, Value>,
     key: &str,
@@ -1148,31 +1150,31 @@ fn require_kwarg_f64(
 ) -> FernResult<f64> {
     get_kwarg_f64(kwargs, key, loc)?.ok_or_else(|| FernError::EvalError {
         loc: loc.clone(),
-        message: format!("`{func_name}` にはキーワード引数 `:{key}` が必要です"),
+        message: format!("`{func_name}` requires keyword argument `:{key}`"),
     })
 }
 
-/// 引数を Shape として取得する
+/// Get an argument as a Shape
 fn get_shape_arg(value: &Value, loc: &SourceLocation) -> FernResult<Arc<ShapeNode>> {
     match value {
         Value::Shape(s) => Ok(Arc::clone(s)),
         _ => Err(FernError::TypeError {
             loc: loc.clone(),
-            expected: "形状".to_string(),
-            actual: value.type_name_ja().to_string(),
+            expected: "shape".to_string(),
+            actual: value.type_name().to_string(),
         }),
     }
 }
 
-// === 組み込み関数実装 ===
+// === Built-in function implementations ===
 
 fn builtin_add(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let mut sum = 0.0_f64;
     for arg in args {
         sum += arg.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: arg.type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
         })?;
     }
     Ok(Value::Float(sum))
@@ -1182,13 +1184,13 @@ fn builtin_sub(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.is_empty() {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`-` は少なくとも1つの引数が必要です".to_string(),
+            message: "`-` requires at least one argument".to_string(),
         });
     }
     let first = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     if args.len() == 1 {
         return Ok(Value::Float(-first));
@@ -1197,8 +1199,8 @@ fn builtin_sub(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     for arg in &args[1..] {
         result -= arg.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: arg.type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
         })?;
     }
     Ok(Value::Float(result))
@@ -1209,8 +1211,8 @@ fn builtin_mul(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     for arg in args {
         product *= arg.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: arg.type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
         })?;
     }
     Ok(Value::Float(product))
@@ -1220,24 +1222,24 @@ fn builtin_div(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() < 2 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`/` は少なくとも2つの引数が必要です".to_string(),
+            message: "`/` requires at least two arguments".to_string(),
         });
     }
     let mut result = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     for arg in &args[1..] {
         let divisor = arg.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: arg.type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
         })?;
         if divisor == 0.0 {
             return Err(FernError::EvalError {
                 loc: loc.clone(),
-                message: "ゼロによる除算です".to_string(),
+                message: "division by zero".to_string(),
             });
         }
         result /= divisor;
@@ -1288,13 +1290,13 @@ fn compare_chain(
     for window in args.windows(2) {
         let a = window[0].as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: window[0].type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: window[0].type_name().to_string(),
         })?;
         let b = window[1].as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: window[1].type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: window[1].type_name().to_string(),
         })?;
         if !cmp(a, b) {
             return Ok(Value::Bool(false));
@@ -1307,7 +1309,7 @@ fn builtin_not(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`not` は1つの引数が必要です".to_string(),
+            message: "`not` requires exactly one argument".to_string(),
         });
     }
     Ok(Value::Bool(!args[0].is_truthy()))
@@ -1321,13 +1323,13 @@ fn builtin_cos(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`cos` は1つの引数が必要です".to_string(),
+            message: "`cos` requires exactly one argument".to_string(),
         });
     }
     let v = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v.cos()))
 }
@@ -1336,13 +1338,13 @@ fn builtin_sin(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`sin` は1つの引数が必要です".to_string(),
+            message: "`sin` requires exactly one argument".to_string(),
         });
     }
     let v = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v.sin()))
 }
@@ -1351,13 +1353,13 @@ fn builtin_sqrt(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`sqrt` は1つの引数が必要です".to_string(),
+            message: "`sqrt` requires exactly one argument".to_string(),
         });
     }
     let v = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v.sqrt()))
 }
@@ -1373,7 +1375,7 @@ fn builtin_print(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
     Ok(args.last().cloned().unwrap_or(Value::Nil))
 }
 
-// === CAD 組み込み関数 ===
+// === CAD built-in functions ===
 
 fn builtin_box(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let (_, kwargs) = split_kwargs(args);
@@ -1391,13 +1393,13 @@ fn builtin_cube(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`cube` は1つの数値引数が必要です（例: (cube 10.0)）".to_string(),
+            message: "`cube` requires one numeric argument (e.g. (cube 10.0))".to_string(),
         });
     }
     let size = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Shape(Arc::new(ShapeNode::Box {
         width: size,
@@ -1486,7 +1488,7 @@ fn builtin_difference(args: &[Value], loc: &SourceLocation) -> FernResult<Value>
     if args.is_empty() {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`difference` は少なくとも1つの引数が必要です".to_string(),
+            message: "`difference` requires at least one argument".to_string(),
         });
     }
     let base = get_shape_arg(&args[0], loc)?;
@@ -1515,7 +1517,7 @@ fn builtin_translate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> 
         .get("shape")
         .ok_or_else(|| FernError::EvalError {
             loc: loc.clone(),
-            message: "`translate` にはキーワード引数 `:shape` が必要です".to_string(),
+            message: "`translate` requires keyword argument `:shape`".to_string(),
         })
         .and_then(|v| get_shape_arg(v, loc))?;
 
@@ -1523,7 +1525,7 @@ fn builtin_translate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> 
         .get("by")
         .ok_or_else(|| FernError::EvalError {
             loc: loc.clone(),
-            message: "`translate` にはキーワード引数 `:by` が必要です".to_string(),
+            message: "`translate` requires keyword argument `:by`".to_string(),
         })
         .and_then(|v| match v {
             Value::Vec3(v) => Ok(*v),
@@ -1535,8 +1537,8 @@ fn builtin_translate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> 
             }
             _ => Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "ベクトル".to_string(),
-                actual: v.type_name_ja().to_string(),
+                expected: "vector".to_string(),
+                actual: v.type_name().to_string(),
             }),
         })?;
 
@@ -1553,7 +1555,7 @@ fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         .get("shape")
         .ok_or_else(|| FernError::EvalError {
             loc: loc.clone(),
-            message: "`rotate` にはキーワード引数 `:shape` が必要です".to_string(),
+            message: "`rotate` requires keyword argument `:shape`".to_string(),
         })
         .and_then(|v| get_shape_arg(v, loc))?;
 
@@ -1565,7 +1567,7 @@ fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
             _ => {
                 return Err(FernError::EvalError {
                     loc: loc.clone(),
-                    message: format!("軸 `:{k}` は未対応です。:x, :y, :z を使用してください"),
+                    message: format!("unsupported axis `:{k}`. Use :x, :y, or :z"),
                 });
             }
         },
@@ -1573,7 +1575,7 @@ fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::EvalError {
                 loc: loc.clone(),
-                message: "`rotate` にはキーワード引数 `:axis` が必要です".to_string(),
+                message: "`rotate` requires keyword argument `:axis`".to_string(),
             });
         }
     };
@@ -1582,13 +1584,13 @@ fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         Some(Value::Angle(a)) => *a,
         Some(v) => v.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "角度".to_string(),
-            actual: v.type_name_ja().to_string(),
+            expected: "angle".to_string(),
+            actual: v.type_name().to_string(),
         })?,
         None => {
             return Err(FernError::EvalError {
                 loc: loc.clone(),
-                message: "`rotate` にはキーワード引数 `:angle` が必要です".to_string(),
+                message: "`rotate` requires keyword argument `:angle`".to_string(),
             });
         }
     };
@@ -1607,15 +1609,15 @@ fn builtin_scale(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         .get("shape")
         .ok_or_else(|| FernError::EvalError {
             loc: loc.clone(),
-            message: "`scale` にはキーワード引数 `:shape` が必要です".to_string(),
+            message: "`scale` requires keyword argument `:shape`".to_string(),
         })
         .and_then(|v| get_shape_arg(v, loc))?;
 
     let factors = if let Some(f) = kwargs.get("factor") {
         let v = f.as_number().ok_or_else(|| FernError::TypeError {
             loc: loc.clone(),
-            expected: "数値".to_string(),
-            actual: f.type_name_ja().to_string(),
+            expected: "number".to_string(),
+            actual: f.type_name().to_string(),
         })?;
         [v, v, v]
     } else {
@@ -1632,13 +1634,13 @@ fn builtin_to_mm(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`to-mm` は1つの長さ引数が必要です".to_string(),
+            message: "`to-mm` requires one length argument".to_string(),
         });
     }
     let v = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v))
 }
@@ -1647,23 +1649,23 @@ fn builtin_to_rad(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 1 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`to-rad` は1つの角度引数が必要です".to_string(),
+            message: "`to-rad` requires one angle argument".to_string(),
         });
     }
     let v = args[0].as_number().ok_or_else(|| FernError::TypeError {
         loc: loc.clone(),
-        expected: "数値".to_string(),
-        actual: args[0].type_name_ja().to_string(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v))
 }
 
-/// `(face instance-keyword :face-name)` — 面への参照を返す
+/// `(face instance-keyword :face-name)` -- returns a face reference
 fn builtin_face(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 2 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`face` は (face :インスタンス名 :面名) の形式が必要です".to_string(),
+            message: "`face` requires (face :instance-name :face-name) form".to_string(),
         });
     }
     let instance_name = match &args[0] {
@@ -1671,8 +1673,8 @@ fn builtin_face(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "キーワード".to_string(),
-                actual: args[0].type_name_ja().to_string(),
+                expected: "keyword".to_string(),
+                actual: args[0].type_name().to_string(),
             });
         }
     };
@@ -1681,8 +1683,8 @@ fn builtin_face(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "キーワード".to_string(),
-                actual: args[1].type_name_ja().to_string(),
+                expected: "keyword".to_string(),
+                actual: args[1].type_name().to_string(),
             });
         }
     };
@@ -1692,12 +1694,12 @@ fn builtin_face(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     }))
 }
 
-/// `(axis instance-keyword :axis-name)` — 軸への参照を返す
+/// `(axis instance-keyword :axis-name)` -- returns an axis reference
 fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() != 2 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`axis` は (axis :インスタンス名 :軸名) の形式が必要です".to_string(),
+            message: "`axis` requires (axis :instance-name :axis-name) form".to_string(),
         });
     }
     let instance_name = match &args[0] {
@@ -1705,8 +1707,8 @@ fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "キーワード".to_string(),
-                actual: args[0].type_name_ja().to_string(),
+                expected: "keyword".to_string(),
+                actual: args[0].type_name().to_string(),
             });
         }
     };
@@ -1715,8 +1717,8 @@ fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "キーワード".to_string(),
-                actual: args[1].type_name_ja().to_string(),
+                expected: "keyword".to_string(),
+                actual: args[1].type_name().to_string(),
             });
         }
     };
@@ -1726,10 +1728,10 @@ fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     }))
 }
 
-// === アセンブリ制約ビルトイン ===
+// === Assembly constraint builtins ===
 
-/// `(place :part shape :as :name :at #p(...))` — パーツを配置する
-/// 結果はアセンブリ環境の *assembly-parts* に蓄積される
+/// `(place :part shape :as :name :at #p(...))` -- place a part
+/// Results are accumulated in the assembly environment's *assembly-parts*
 fn builtin_place(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let (_, kwargs) = split_kwargs(args);
 
@@ -1739,7 +1741,7 @@ fn builtin_place(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::EvalError {
                 loc: loc.clone(),
-                message: "`place` にはキーワード引数 `:as` が必要です".to_string(),
+                message: "`place` requires keyword argument `:as`".to_string(),
             });
         }
     };
@@ -1748,16 +1750,16 @@ fn builtin_place(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         .cloned()
         .unwrap_or(Value::Point3([0.0, 0.0, 0.0]));
 
-    // パーツデータをリストとして返す（eval_assembly が回収する）
+    // Return part data as a list (eval_assembly collects it)
     Ok(Value::List(vec![name, shape, Value::Nil, position]))
 }
 
-/// `(mate face-ref1 face-ref2)` — 面を合わせる制約
+/// `(mate face-ref1 face-ref2)` -- mate faces constraint
 fn builtin_mate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() < 2 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`mate` は (mate face-ref1 face-ref2) の形式が必要です".to_string(),
+            message: "`mate` requires (mate face-ref1 face-ref2) form".to_string(),
         });
     }
     let f1 = match &args[0] {
@@ -1765,8 +1767,8 @@ fn builtin_mate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "面参照".to_string(),
-                actual: args[0].type_name_ja().to_string(),
+                expected: "face-ref".to_string(),
+                actual: args[0].type_name().to_string(),
             });
         }
     };
@@ -1775,8 +1777,8 @@ fn builtin_mate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "面参照".to_string(),
-                actual: args[1].type_name_ja().to_string(),
+                expected: "face-ref".to_string(),
+                actual: args[1].type_name().to_string(),
             });
         }
     };
@@ -1787,13 +1789,12 @@ fn builtin_mate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     ]))
 }
 
-/// `(align-axis axis-ref1 axis-ref2)` — 軸を揃える制約
+/// `(align-axis axis-ref1 axis-ref2)` -- align axes constraint
 fn builtin_align_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     if args.len() < 2 {
         return Err(FernError::EvalError {
             loc: loc.clone(),
-            message: "`align-axis` は (align-axis axis-ref1 axis-ref2) の形式が必要です"
-                .to_string(),
+            message: "`align-axis` requires (align-axis axis-ref1 axis-ref2) form".to_string(),
         });
     }
     let a1 = match &args[0] {
@@ -1801,8 +1802,8 @@ fn builtin_align_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value>
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "軸参照".to_string(),
-                actual: args[0].type_name_ja().to_string(),
+                expected: "axis-ref".to_string(),
+                actual: args[0].type_name().to_string(),
             });
         }
     };
@@ -1811,8 +1812,8 @@ fn builtin_align_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value>
         _ => {
             return Err(FernError::TypeError {
                 loc: loc.clone(),
-                expected: "軸参照".to_string(),
-                actual: args[1].type_name_ja().to_string(),
+                expected: "axis-ref".to_string(),
+                actual: args[1].type_name().to_string(),
             });
         }
     };
@@ -1823,16 +1824,16 @@ fn builtin_align_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value>
     ]))
 }
 
-/// `(fit :shaft face-ref :hole face-ref :clearance 0.1 :type :clearance)` — はめ合い
+/// `(fit :shaft face-ref :hole face-ref :clearance 0.1 :type :clearance)` -- fit constraint
 fn builtin_fit(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let (_, kwargs) = split_kwargs(args);
     let shaft = kwargs.get("shaft").ok_or_else(|| FernError::EvalError {
         loc: loc.clone(),
-        message: "`fit` には `:shaft` が必要です".to_string(),
+        message: "`fit` requires `:shaft`".to_string(),
     })?;
     let hole = kwargs.get("hole").ok_or_else(|| FernError::EvalError {
         loc: loc.clone(),
-        message: "`fit` には `:hole` が必要です".to_string(),
+        message: "`fit` requires `:hole`".to_string(),
     })?;
     Ok(Value::List(vec![
         Value::Symbol("constraint-fit".to_string()),
@@ -1841,7 +1842,7 @@ fn builtin_fit(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     ]))
 }
 
-/// `(joint :type :fixed :parts (list :a :b))` — ジョイント定義
+/// `(joint :type :fixed :parts (list :a :b))` -- joint definition
 fn builtin_joint(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
     let (_, kwargs) = split_kwargs(args);
     let joint_type = kwargs
@@ -1903,9 +1904,9 @@ mod tests {
         let err = eval_err("(/ 10 0)");
         match err {
             FernError::EvalError { message, .. } => {
-                assert!(message.contains("ゼロ"));
+                assert!(message.contains("zero"));
             }
-            other => panic!("想定外のエラー型: {other:?}"),
+            other => panic!("unexpected error type: {other:?}"),
         }
     }
 
@@ -1972,7 +1973,7 @@ mod tests {
         let result = eval("(cos 0)");
         match result {
             Value::Float(v) => assert!((v - 1.0).abs() < 1e-10),
-            other => panic!("期待: Float、実際: {other:?}"),
+            other => panic!("expected Float, got {other:?}"),
         }
     }
 
@@ -1981,7 +1982,7 @@ mod tests {
         let result = eval("pi");
         match result {
             Value::Float(v) => assert!((v - std::f64::consts::PI).abs() < 1e-10),
-            other => panic!("期待: Float、実際: {other:?}"),
+            other => panic!("expected Float, got {other:?}"),
         }
     }
 
@@ -2005,7 +2006,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2017,9 +2018,9 @@ mod tests {
                 ShapeNode::Sphere { radius, .. } => {
                     assert!((radius - 5.0).abs() < 1e-10);
                 }
-                other => panic!("期待: Sphere、実際: {other:?}"),
+                other => panic!("expected Sphere, got {other:?}"),
             },
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2043,9 +2044,9 @@ mod tests {
                 ShapeNode::Translate { offset, .. } => {
                     assert_eq!(*offset, [5.0, 0.0, 0.0]);
                 }
-                other => panic!("期待: Translate、実際: {other:?}"),
+                other => panic!("expected Translate, got {other:?}"),
             },
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2068,7 +2069,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2097,7 +2098,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2125,13 +2126,13 @@ mod tests {
                     }
                 );
             }
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
     #[test]
     fn test_mvp_completion_criteria() {
-        // Phase 1 MVP 完了基準のコード
+        // Phase 1 MVP completion criteria code
         let result = eval(
             r#"
             (defpart my-part
@@ -2159,9 +2160,9 @@ mod tests {
                     );
                     assert_eq!(cutters.len(), 1);
                 }
-                other => panic!("期待: Difference、実際: {other:?}"),
+                other => panic!("expected Difference, got {other:?}"),
             },
-            other => panic!("期待: Shape、実際: {other:?}"),
+            other => panic!("expected Shape, got {other:?}"),
         }
     }
 
@@ -2195,7 +2196,7 @@ mod tests {
 
     #[test]
     fn test_type_check_defpart_accepts_valid() {
-        // length 型に数値を渡す → OK
+        // Passing a number to length type -> OK
         let result = eval(
             r#"
             (defpart p "t"
@@ -2209,7 +2210,7 @@ mod tests {
 
     #[test]
     fn test_type_check_defpart_rejects_invalid() {
-        // length 型に文字列を渡す → 型エラー
+        // Passing a string to length type -> type error
         let err = eval_err(
             r#"
             (defpart p "t"
@@ -2223,7 +2224,7 @@ mod tests {
 
     #[test]
     fn test_type_check_keyword_param() {
-        // keyword 型にキーワードを渡す → OK
+        // Passing a keyword to keyword type -> OK
         let result = eval(
             r#"
             (defpart p "t"
@@ -2269,7 +2270,7 @@ mod tests {
                 assert_eq!(r.instance_name, "bolt");
                 assert_eq!(r.face_name, "head-top");
             }
-            other => panic!("期待: FaceRef、実際: {other:?}"),
+            other => panic!("expected FaceRef, got {other:?}"),
         }
     }
 
@@ -2281,7 +2282,7 @@ mod tests {
                 assert_eq!(r.instance_name, "bolt");
                 assert_eq!(r.axis_name, "center");
             }
-            other => panic!("期待: AxisRef、実際: {other:?}"),
+            other => panic!("expected AxisRef, got {other:?}"),
         }
     }
 
@@ -2301,7 +2302,7 @@ mod tests {
                 assert_eq!(asm.parts[0].name, "plate");
                 assert_eq!(asm.parts[1].name, "pin");
             }
-            other => panic!("期待: Assembly、実際: {other:?}"),
+            other => panic!("expected Assembly, got {other:?}"),
         }
     }
 
@@ -2321,7 +2322,7 @@ mod tests {
                 assert_eq!(asm.parts.len(), 2);
                 assert_eq!(asm.constraints.len(), 2);
             }
-            other => panic!("期待: Assembly、実際: {other:?}"),
+            other => panic!("expected Assembly, got {other:?}"),
         }
     }
 
@@ -2337,11 +2338,11 @@ mod tests {
         match result {
             Value::Assembly(asm) => {
                 assert_eq!(asm.parts.len(), 2);
-                // ball の transform に Z=10 のオフセット
+                // ball's transform should have Z=10 offset
                 let ball = &asm.parts[1];
                 assert!((ball.transform[14] - 10.0).abs() < 1e-10);
             }
-            other => panic!("期待: Assembly、実際: {other:?}"),
+            other => panic!("expected Assembly, got {other:?}"),
         }
     }
 
@@ -2355,7 +2356,7 @@ mod tests {
         );
         assert!(
             matches!(result, Value::Shape(_)),
-            "require + m3-bolt で Shape が返るべき: {result:?}"
+            "require + m3-bolt should return Shape: {result:?}"
         );
     }
 
@@ -2364,9 +2365,9 @@ mod tests {
         let err = eval_err("(require :nonexistent-module)");
         match err {
             FernError::EvalError { message, .. } => {
-                assert!(message.contains("見つかりません"));
+                assert!(message.contains("not found"));
             }
-            other => panic!("想定外のエラー: {other:?}"),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 }

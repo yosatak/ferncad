@@ -1,29 +1,29 @@
 /**
- * ferncad Web アプリケーション エントリポイント
+ * ferncad web application entry point
  *
- * エディタ、ビューア、WASM を接続する。
- * アセンブリ時はパーツ別メッシュ + ツリー表示に対応。
+ * Connects the editor, 3D viewer, and WASM engine.
+ * Supports both single shapes and multi-part assemblies.
  */
 
 import { createEditor, getCode } from './editor';
 import { Viewer } from './viewer';
-import { initWasm, evaluateParts, exportStl, exportStep, type PartsResult } from './wasm-bridge';
+import { initWasm, evaluateParts, exportStl, type PartsResult } from './wasm-bridge';
 
-/** ステータスバーを更新する */
+/** Update the status bar */
 function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
   const statusBar = document.getElementById('status-bar')!;
   statusBar.textContent = message;
   statusBar.className = type;
 }
 
-/** アセンブリツリーを更新する */
+/** Update the assembly tree panel */
 function updateAssemblyTree(parts: PartsResult['parts']): void {
   const tree = document.getElementById('assembly-tree')!;
   if (parts.length <= 1 && parts[0]?.name === 'shape') {
-    tree.innerHTML = '<div class="tree-item">単一形状</div>';
+    tree.innerHTML = '<div class="tree-item">Single shape</div>';
     return;
   }
-  tree.innerHTML = parts.map((p, i) => {
+  tree.innerHTML = parts.map((p) => {
     const r = Math.round(p.color[0] * 255);
     const g = Math.round(p.color[1] * 255);
     const b = Math.round(p.color[2] * 255);
@@ -36,15 +36,14 @@ function updateAssemblyTree(parts: PartsResult['parts']): void {
   }).join('');
 }
 
-/** メインの初期化処理 */
 async function main(): Promise<void> {
-  setStatus('WASM を初期化中...');
+  setStatus('Initializing WASM...');
 
   try {
     await initWasm();
-    setStatus('準備完了', 'success');
+    setStatus('Ready', 'success');
   } catch (e) {
-    setStatus(`WASM 初期化エラー: ${e}`, 'error');
+    setStatus(`WASM init error: ${e}`, 'error');
     return;
   }
 
@@ -54,7 +53,7 @@ async function main(): Promise<void> {
   function runEvaluation(code: string): void {
     if (!code.trim()) {
       viewer.clearMesh();
-      setStatus('コードが空です', 'info');
+      setStatus('Empty code', 'info');
       updateAssemblyTree([]);
       return;
     }
@@ -70,7 +69,7 @@ async function main(): Promise<void> {
 
     const { parts } = result;
     if (parts.length === 0 || parts.every(p => p.positions.length === 0)) {
-      setStatus('形状が生成されませんでした', 'info');
+      setStatus('No shape generated', 'info');
       viewer.clearMesh();
       updateAssemblyTree([]);
       return;
@@ -83,8 +82,8 @@ async function main(): Promise<void> {
     const partCount = parts.length;
     setStatus(
       partCount > 1
-        ? `${partCount} パーツ, ${totalTris} 三角形を描画`
-        : `${totalTris} 三角形を描画`,
+        ? `${partCount} parts, ${totalTris} triangles`
+        : `${totalTris} triangles`,
       'success',
     );
   }
@@ -93,12 +92,10 @@ async function main(): Promise<void> {
   const editor = createEditor(editorContainer, runEvaluation);
   runEvaluation(getCode(editor));
 
-  // 評価ボタン
   document.getElementById('btn-evaluate')!.addEventListener('click', () => {
     runEvaluation(getCode(editor));
   });
 
-  // Ctrl+Enter
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'Enter') {
       e.preventDefault();
@@ -106,30 +103,17 @@ async function main(): Promise<void> {
     }
   });
 
-  // STL エクスポート
   document.getElementById('btn-export-stl')!.addEventListener('click', () => {
     const result = exportStl(getCode(editor));
     if ('error' in result) {
-      setStatus(`STL エラー: ${result.error}`, 'error');
+      setStatus(`STL error: ${result.error}`, 'error');
       return;
     }
     downloadBlob(result as BlobPart, 'ferncad-export.stl', 'application/octet-stream');
-    setStatus('STL をダウンロードしました', 'success');
-  });
-
-  // STEP エクスポート
-  document.getElementById('btn-export-step')!.addEventListener('click', () => {
-    const result = exportStep(getCode(editor));
-    if ('error' in result) {
-      setStatus(`STEP エラー: ${result.error}`, 'error');
-      return;
-    }
-    downloadBlob(result as BlobPart, 'ferncad-export.step', 'application/octet-stream');
-    setStatus('STEP をダウンロードしました', 'success');
+    setStatus('STL downloaded', 'success');
   });
 }
 
-/** Blob をダウンロードする */
 function downloadBlob(data: BlobPart, filename: string, mimeType: string): void {
   const blob = new Blob([data], { type: mimeType });
   const url = URL.createObjectURL(blob);

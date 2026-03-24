@@ -1,15 +1,15 @@
-//! ferncad エラー型定義
+//! ferncad error type definitions
 //!
-//! すべてのエラーは日本語メッセージで、行番号・列番号を含む。
+//! All errors include line and column numbers.
 
 use thiserror::Error;
 
-/// ソースコード上の位置情報
+/// Source location information
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
-    /// 行番号（1始まり）
+    /// Line number (1-based)
     pub line: usize,
-    /// 列番号（1始まり）
+    /// Column number (1-based)
     pub col: usize,
 }
 
@@ -19,7 +19,7 @@ impl std::fmt::Display for SourceLocation {
     }
 }
 
-/// ソースコード中のバイトオフセットから行番号・列番号を計算する
+/// Compute line and column numbers from a byte offset in source code
 pub fn offset_to_location(source: &str, offset: usize) -> SourceLocation {
     let mut line = 1;
     let mut col = 1;
@@ -37,51 +37,51 @@ pub fn offset_to_location(source: &str, offset: usize) -> SourceLocation {
     SourceLocation { line, col }
 }
 
-/// ferncad の統合エラー型
+/// Unified error type for ferncad
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum FernError {
-    /// 字句解析エラー
-    #[error("{loc} 字句解析エラー: 不正なトークン `{token}`")]
+    /// Lexer error
+    #[error("{loc} lex error: invalid token `{token}`")]
     LexError { loc: SourceLocation, token: String },
 
-    /// 構文エラー: 対応する閉じ括弧がない
-    #[error("{loc} 構文エラー: 対応する `)` がありません")]
+    /// Parse error: unmatched open parenthesis
+    #[error("{loc} parse error: missing closing `)`")]
     UnmatchedOpenParen { loc: SourceLocation },
 
-    /// 構文エラー: 余分な閉じ括弧
-    #[error("{loc} 構文エラー: 対応する `(` がない `)` があります")]
+    /// Parse error: unmatched close parenthesis
+    #[error("{loc} parse error: unexpected `)` without matching `(`")]
     UnmatchedCloseParen { loc: SourceLocation },
 
-    /// 構文エラー: 一般
-    #[error("{loc} 構文エラー: {message}")]
+    /// Parse error: general
+    #[error("{loc} parse error: {message}")]
     ParseError {
         loc: SourceLocation,
         message: String,
     },
 
-    /// 評価エラー: 一般
-    #[error("{loc} 評価エラー: {message}")]
+    /// Evaluation error: general
+    #[error("{loc} eval error: {message}")]
     EvalError {
         loc: SourceLocation,
         message: String,
     },
 
-    /// 評価エラー: 未定義の変数
-    #[error("{loc} 評価エラー: 変数 `{name}` は定義されていません")]
+    /// Evaluation error: undefined variable
+    #[error("{loc} eval error: variable `{name}` is not defined")]
     UndefinedVariable { loc: SourceLocation, name: String },
 
-    /// 型エラー
-    #[error("{loc} 型エラー: {expected}が必要ですが、{actual}が渡されました")]
+    /// Type error
+    #[error("{loc} type error: expected {expected}, but got {actual}")]
     TypeError {
         loc: SourceLocation,
         expected: String,
         actual: String,
     },
 
-    /// CAD エラー
-    #[error("CADエラー: {message}")]
+    /// CAD error
+    #[error("CAD error: {message}")]
     CadError { message: String },
 }
 
-/// ferncad の Result 型エイリアス
+/// Result type alias for ferncad
 pub type FernResult<T> = Result<T, FernError>;

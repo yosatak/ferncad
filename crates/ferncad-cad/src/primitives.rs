@@ -1,29 +1,29 @@
-//! プリミティブ形状のメッシュ生成
+//! Primitive shape mesh generation
 //!
-//! box, sphere, cylinder, cone, prism のメッシュを直接生成する。
+//! Directly generates meshes for box, sphere, cylinder, cone, and prism.
 
 use std::f64::consts::PI;
 
 use crate::mesh::TriMesh;
 
-/// デフォルトのセグメント数
+/// Default number of segments
 pub const DEFAULT_SEGMENTS: u32 = 32;
 
-/// 直方体メッシュを生成する（原点中心）
+/// Generate a box mesh (centered at origin)
 ///
-/// 8 頂点、12 三角形
+/// 8 vertices, 12 triangles
 pub fn generate_box(width: f64, depth: f64, height: f64) -> TriMesh {
     let hw = width / 2.0;
     let hd = depth / 2.0;
     let hh = height / 2.0;
 
     let vertices = vec![
-        // 前面 (z+)
+        // front face (z+)
         [-hw, -hd, hh], // 0
         [hw, -hd, hh],  // 1
         [hw, hd, hh],   // 2
         [-hw, hd, hh],  // 3
-        // 後面 (z-)
+        // back face (z-)
         [-hw, -hd, -hh], // 4
         [hw, -hd, -hh],  // 5
         [hw, hd, -hh],   // 6
@@ -31,22 +31,22 @@ pub fn generate_box(width: f64, depth: f64, height: f64) -> TriMesh {
     ];
 
     let triangles = vec![
-        // 前面 (z+)
+        // front face (z+)
         [0, 1, 2],
         [0, 2, 3],
-        // 後面 (z-)
+        // back face (z-)
         [5, 4, 7],
         [5, 7, 6],
-        // 上面 (y+)
+        // top face (y+)
         [3, 2, 6],
         [3, 6, 7],
-        // 下面 (y-)
+        // bottom face (y-)
         [4, 5, 1],
         [4, 1, 0],
-        // 右面 (x+)
+        // right face (x+)
         [1, 5, 6],
         [1, 6, 2],
-        // 左面 (x-)
+        // left face (x-)
         [4, 0, 3],
         [4, 3, 7],
     ];
@@ -57,7 +57,7 @@ pub fn generate_box(width: f64, depth: f64, height: f64) -> TriMesh {
     }
 }
 
-/// 球メッシュを生成する（UV sphere、原点中心）
+/// Generate a sphere mesh (UV sphere, centered at origin)
 pub fn generate_sphere(radius: f64, segments: u32) -> TriMesh {
     let rings = segments / 2;
     let sectors = segments;
@@ -65,7 +65,7 @@ pub fn generate_sphere(radius: f64, segments: u32) -> TriMesh {
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
 
-    // 頂点生成
+    // Generate vertices
     for ring in 0..=rings {
         let phi = PI * ring as f64 / rings as f64;
         let sin_phi = phi.sin();
@@ -80,7 +80,7 @@ pub fn generate_sphere(radius: f64, segments: u32) -> TriMesh {
         }
     }
 
-    // 三角形生成
+    // Generate triangles
     let cols = sectors + 1;
     for ring in 0..rings {
         for sector in 0..sectors {
@@ -109,28 +109,28 @@ pub fn generate_sphere(radius: f64, segments: u32) -> TriMesh {
     }
 }
 
-/// 円柱メッシュを生成する（原点中心、Z 軸方向）
+/// Generate a cylinder mesh (centered at origin, along Z axis)
 pub fn generate_cylinder(radius: f64, height: f64, segments: u32) -> TriMesh {
     let hh = height / 2.0;
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
 
-    // 上キャップ中心
+    // Top cap center
     let top_center = vertices.len();
     vertices.push([0.0, 0.0, hh]);
 
-    // 上キャップ外周
+    // Top cap rim
     let top_ring_start = vertices.len();
     for i in 0..segments {
         let theta = 2.0 * PI * i as f64 / segments as f64;
         vertices.push([radius * theta.cos(), radius * theta.sin(), hh]);
     }
 
-    // 下キャップ中心
+    // Bottom cap center
     let bot_center = vertices.len();
     vertices.push([0.0, 0.0, -hh]);
 
-    // 下キャップ外周
+    // Bottom cap rim
     let bot_ring_start = vertices.len();
     for i in 0..segments {
         let theta = 2.0 * PI * i as f64 / segments as f64;
@@ -139,19 +139,19 @@ pub fn generate_cylinder(radius: f64, height: f64, segments: u32) -> TriMesh {
 
     let seg = segments as usize;
 
-    // 上キャップ三角形
+    // Top cap triangles
     for i in 0..seg {
         let next = (i + 1) % seg;
         triangles.push([top_center, top_ring_start + i, top_ring_start + next]);
     }
 
-    // 下キャップ三角形（裏向き）
+    // Bottom cap triangles (reversed winding)
     for i in 0..seg {
         let next = (i + 1) % seg;
         triangles.push([bot_center, bot_ring_start + next, bot_ring_start + i]);
     }
 
-    // 側面
+    // Side faces
     for i in 0..seg {
         let next = (i + 1) % seg;
         let t0 = top_ring_start + i;
@@ -168,15 +168,15 @@ pub fn generate_cylinder(radius: f64, height: f64, segments: u32) -> TriMesh {
     }
 }
 
-/// 円錐メッシュを生成する（原点中心、Z 軸方向）
+/// Generate a cone mesh (centered at origin, along Z axis)
 pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments: u32) -> TriMesh {
-    // radius_top が 0 に近い場合は先端が尖った円錐
-    // そうでなければ truncated cone
+    // If radius_top is near zero, the cone has a sharp apex;
+    // otherwise it is a truncated cone.
     let hh = height / 2.0;
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
 
-    // 上面
+    // Top face
     let top_center = vertices.len();
     vertices.push([0.0, 0.0, hh]);
 
@@ -186,7 +186,7 @@ pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments:
         vertices.push([radius_top * theta.cos(), radius_top * theta.sin(), hh]);
     }
 
-    // 下面
+    // Bottom face
     let bot_center = vertices.len();
     vertices.push([0.0, 0.0, -hh]);
 
@@ -202,7 +202,7 @@ pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments:
 
     let seg = segments as usize;
 
-    // 上キャップ（radius_top > 0 の場合のみ）
+    // Top cap (only if radius_top > 0)
     if radius_top > 1e-10 {
         for i in 0..seg {
             let next = (i + 1) % seg;
@@ -210,13 +210,13 @@ pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments:
         }
     }
 
-    // 下キャップ
+    // Bottom cap
     for i in 0..seg {
         let next = (i + 1) % seg;
         triangles.push([bot_center, bot_ring_start + next, bot_ring_start + i]);
     }
 
-    // 側面
+    // Side faces
     for i in 0..seg {
         let next = (i + 1) % seg;
         if radius_top > 1e-10 {
@@ -227,7 +227,7 @@ pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments:
             triangles.push([t0, b0, b1]);
             triangles.push([t0, b1, t1]);
         } else {
-            // 尖った円錐: 頂点から底面三角形
+            // Sharp cone: triangles from apex to bottom rim
             let b0 = bot_ring_start + i;
             let b1 = bot_ring_start + next;
             triangles.push([top_center, b0, b1]);
@@ -240,12 +240,12 @@ pub fn generate_cone(radius_bottom: f64, radius_top: f64, height: f64, segments:
     }
 }
 
-/// 多角柱メッシュを生成する（原点中心、Z 軸方向）
+/// Generate a prism mesh (centered at origin, along Z axis)
 pub fn generate_prism(sides: u32, radius: f64, height: f64) -> TriMesh {
     generate_cylinder(radius, height, sides)
 }
 
-/// トーラスメッシュを生成する（原点中心、Z 軸周り）
+/// Generate a torus mesh (centered at origin, around Z axis)
 pub fn generate_torus(radius_major: f64, radius_minor: f64, segments: u32) -> TriMesh {
     let ring_segments = segments;
     let tube_segments = segments / 2;
@@ -356,7 +356,7 @@ mod tests {
     fn test_to_flat_arrays() {
         let mesh = generate_box(10.0, 10.0, 10.0);
         let (positions, normals) = mesh.to_flat_arrays();
-        // 12 三角形 × 3 頂点 × 3 座標
+        // 12 triangles x 3 vertices x 3 coordinates
         assert_eq!(positions.len(), 12 * 3 * 3);
         assert_eq!(normals.len(), 12 * 3 * 3);
     }

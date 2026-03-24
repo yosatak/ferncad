@@ -1,14 +1,14 @@
 /**
- * Three.js 3D ビューア
+ * Three.js 3D viewer
  *
- * メッシュの表示、OrbitControls、ライティングを管理する。
- * アセンブリ時はパーツごとに色分けしたメッシュを表示する。
+ * Manages mesh display, OrbitControls, and lighting.
+ * Supports per-part colored meshes for assemblies.
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-/** パーツメッシュの情報 */
+/** Part mesh data */
 export interface PartMeshData {
   name: string;
   positions: Float32Array;
@@ -16,7 +16,7 @@ export interface PartMeshData {
   color: [number, number, number];
 }
 
-/** 3D ビューアクラス */
+/** 3D viewer class */
 export class Viewer {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -41,7 +41,7 @@ export class Viewer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
 
-    // ライティング
+    // Lighting
     this.scene.add(new THREE.AmbientLight(0x404040, 2));
     const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight1.position.set(50, 80, 50);
@@ -50,7 +50,7 @@ export class Viewer {
     dirLight2.position.set(-30, -20, -50);
     this.scene.add(dirLight2);
 
-    // グリッド + 軸
+    // Grid + axes
     const grid = new THREE.GridHelper(100, 20, 0x444466, 0x333355);
     grid.rotation.x = Math.PI / 2;
     this.scene.add(grid);
@@ -61,11 +61,11 @@ export class Viewer {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
 
-    // パーツグループ
+    // Parts group
     this.partsGroup = new THREE.Group();
     this.scene.add(this.partsGroup);
 
-    // リサイズ
+    // Resize
     const resizeObserver = new ResizeObserver(() => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -78,7 +78,7 @@ export class Viewer {
     this.animate();
   }
 
-  /** 単一メッシュを更新する（後方互換） */
+  /** Update with a single mesh (backward compatible) */
   updateMesh(positions: Float32Array, normals: Float32Array): void {
     this.updateParts([{
       name: 'shape',
@@ -88,7 +88,7 @@ export class Viewer {
     }]);
   }
 
-  /** パーツごとのメッシュを更新する */
+  /** Update with per-part meshes */
   updateParts(parts: PartMeshData[]): void {
     this.clearMesh();
 
@@ -112,7 +112,7 @@ export class Viewer {
       mesh.name = part.name;
       this.partsGroup.add(mesh);
 
-      // ワイヤーフレーム
+      // Wireframe
       const edges = new THREE.EdgesGeometry(geometry, 15);
       const edgeMat = new THREE.LineBasicMaterial({
         color: 0x444466,
@@ -125,7 +125,7 @@ export class Viewer {
     }
   }
 
-  /** メッシュをクリアする */
+  /** Clear all meshes */
   clearMesh(): void {
     while (this.partsGroup.children.length > 0) {
       const child = this.partsGroup.children[0];

@@ -1,6 +1,6 @@
-//! ferncad 構文解析器（Parser）
+//! ferncad parser
 //!
-//! トークン列から S 式ツリー（`Value`）を生成する再帰下降パーサー。
+//! A recursive descent parser that produces an S-expression tree (`Value`) from a token stream.
 
 use logos::Span;
 
@@ -8,7 +8,7 @@ use crate::error::{FernError, FernResult, SourceLocation};
 use crate::lexer::{span_to_location, tokenize, SpannedToken, Token};
 use crate::types::Value;
 
-/// パーサーの状態
+/// Parser state
 struct Parser<'a> {
     tokens: Vec<SpannedToken>,
     source: &'a str,
@@ -16,7 +16,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// 新しいパーサーを作成する
+    /// Create a new parser
     fn new(tokens: Vec<SpannedToken>, source: &'a str) -> Self {
         Self {
             tokens,
@@ -25,12 +25,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 現在のトークンを参照する
+    /// Peek at the current token
     fn peek(&self) -> Option<&SpannedToken> {
         self.tokens.get(self.pos)
     }
 
-    /// 現在のトークンを消費して次へ進む。インデックスを返す。
+    /// Consume the current token and advance. Returns the index.
     fn advance(&mut self) -> Option<usize> {
         if self.pos < self.tokens.len() {
             let idx = self.pos;
@@ -41,17 +41,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 指定位置のトークンを参照する
+    /// Get a reference to the token at the given position
     fn token_at(&self, idx: usize) -> &Token {
         &self.tokens[idx].token
     }
 
-    /// 指定位置のスパンを参照する
+    /// Get a reference to the span at the given position
     fn span_at(&self, idx: usize) -> &Span {
         &self.tokens[idx].span
     }
 
-    /// 現在位置のソースロケーションを取得する
+    /// Get the source location at the current position
     fn current_location(&self) -> SourceLocation {
         if let Some(st) = self.tokens.get(self.pos) {
             span_to_location(self.source, &st.span)
@@ -62,16 +62,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 指定位置のソースロケーションを取得する
+    /// Get the source location at the given position
     fn location_at(&self, idx: usize) -> SourceLocation {
         span_to_location(self.source, self.span_at(idx))
     }
 
-    /// 単一の S 式をパースする
+    /// Parse a single S-expression
     fn parse_expr(&mut self) -> FernResult<Value> {
         let idx = self.advance().ok_or_else(|| FernError::ParseError {
             loc: self.current_location(),
-            message: "予期しない入力の終了です".to_string(),
+            message: "unexpected end of input".to_string(),
         })?;
 
         match self.token_at(idx).clone() {
@@ -99,14 +99,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// リスト（開き括弧の後）をパースする
+    /// Parse a list (after the opening parenthesis)
     fn parse_list(&mut self, open_pos: usize) -> FernResult<Value> {
         let mut items = Vec::new();
 
         loop {
             match self.peek() {
                 Some(st) if st.token == Token::RParen => {
-                    self.advance(); // `)` を消費
+                    self.advance(); // consume `)`
                     return Ok(Value::List(items));
                 }
                 Some(_) => {
@@ -121,17 +121,19 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 特殊リテラル `#u(...)`, `#a(...)`, `#v(...)`, `#p(...)` をパースする
+    /// Parse special literals `#u(...)`, `#a(...)`, `#v(...)`, `#p(...)`
     fn parse_special_literal(&mut self, kind: &str) -> FernResult<Value> {
         let loc = self.current_location();
         match self.peek() {
             Some(st) if st.token == Token::LParen => {
-                self.advance(); // `(` を消費
+                self.advance(); // consume `(`
             }
             _ => {
                 return Err(FernError::ParseError {
                     loc,
-                    message: format!("#{kind} の後に `(` が必要です。例: #{kind}(値 ...)"),
+                    message: format!(
+                        "#{kind} must be followed by `(`. Example: #{kind}(value ...)"
+                    ),
                 });
             }
         }
@@ -145,7 +147,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `#u(値 :単位)` をパースする
+    /// Parse `#u(value :unit)`
     fn parse_unit_literal(&mut self) -> FernResult<Value> {
         let loc = self.current_location();
         let value_expr = self.parse_expr()?;
@@ -153,7 +155,7 @@ impl<'a> Parser<'a> {
             .as_number()
             .ok_or_else(|| FernError::ParseError {
                 loc: loc.clone(),
-                message: "単位リテラル `#u` の第1引数は数値が必要です".to_string(),
+                message: "unit literal `#u` requires a number as the first argument".to_string(),
             })?;
 
         let unit_loc = self.current_location();
@@ -163,23 +165,24 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(FernError::ParseError {
                     loc: unit_loc,
-                    message: "単位リテラル `#u` の第2引数はキーワード（例: :mm）が必要です"
-                        .to_string(),
+                    message:
+                        "unit literal `#u` requires a keyword as the second argument (e.g. :mm)"
+                            .to_string(),
                 });
             }
         };
 
-        // 閉じ括弧
-        self.expect_rparen("単位リテラル #u")?;
+        // closing parenthesis
+        self.expect_rparen("unit literal #u")?;
 
-        // mm への変換
+        // convert to mm
         let mm_value = convert_to_mm(value, &unit)
             .map_err(|msg| FernError::ParseError { loc, message: msg })?;
 
         Ok(Value::Length(mm_value))
     }
 
-    /// `#a(値 :単位)` をパースする
+    /// Parse `#a(value :unit)`
     fn parse_angle_literal(&mut self) -> FernResult<Value> {
         let loc = self.current_location();
         let value_expr = self.parse_expr()?;
@@ -187,7 +190,7 @@ impl<'a> Parser<'a> {
             .as_number()
             .ok_or_else(|| FernError::ParseError {
                 loc: loc.clone(),
-                message: "角度リテラル `#a` の第1引数は数値が必要です".to_string(),
+                message: "angle literal `#a` requires a number as the first argument".to_string(),
             })?;
 
         let unit_loc = self.current_location();
@@ -197,43 +200,44 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(FernError::ParseError {
                     loc: unit_loc,
-                    message: "角度リテラル `#a` の第2引数はキーワード（例: :deg）が必要です"
-                        .to_string(),
+                    message:
+                        "angle literal `#a` requires a keyword as the second argument (e.g. :deg)"
+                            .to_string(),
                 });
             }
         };
 
-        // 閉じ括弧
-        self.expect_rparen("角度リテラル #a")?;
+        // closing parenthesis
+        self.expect_rparen("angle literal #a")?;
 
-        // rad への変換
+        // convert to rad
         let rad_value = convert_to_rad(value, &unit)
             .map_err(|msg| FernError::ParseError { loc, message: msg })?;
 
         Ok(Value::Angle(rad_value))
     }
 
-    /// `#v(x y z)` をパースする
+    /// Parse `#v(x y z)`
     fn parse_vec3_literal(&mut self) -> FernResult<Value> {
         let loc = self.current_location();
-        let x = self.parse_number_component("ベクトル #v", "x", &loc)?;
-        let y = self.parse_number_component("ベクトル #v", "y", &loc)?;
-        let z = self.parse_number_component("ベクトル #v", "z", &loc)?;
-        self.expect_rparen("ベクトルリテラル #v")?;
+        let x = self.parse_number_component("vector #v", "x", &loc)?;
+        let y = self.parse_number_component("vector #v", "y", &loc)?;
+        let z = self.parse_number_component("vector #v", "z", &loc)?;
+        self.expect_rparen("vector literal #v")?;
         Ok(Value::Vec3([x, y, z]))
     }
 
-    /// `#p(x y z)` をパースする
+    /// Parse `#p(x y z)`
     fn parse_point3_literal(&mut self) -> FernResult<Value> {
         let loc = self.current_location();
-        let x = self.parse_number_component("点 #p", "x", &loc)?;
-        let y = self.parse_number_component("点 #p", "y", &loc)?;
-        let z = self.parse_number_component("点 #p", "z", &loc)?;
-        self.expect_rparen("点リテラル #p")?;
+        let x = self.parse_number_component("point #p", "x", &loc)?;
+        let y = self.parse_number_component("point #p", "y", &loc)?;
+        let z = self.parse_number_component("point #p", "z", &loc)?;
+        self.expect_rparen("point literal #p")?;
         Ok(Value::Point3([x, y, z]))
     }
 
-    /// 数値コンポーネントをパースするヘルパー
+    /// Helper to parse a numeric component
     fn parse_number_component(
         &mut self,
         context: &str,
@@ -243,11 +247,11 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         expr.as_number().ok_or_else(|| FernError::ParseError {
             loc: loc.clone(),
-            message: format!("{context} の {component} 成分は数値が必要です"),
+            message: format!("{context} {component} component must be a number"),
         })
     }
 
-    /// 閉じ括弧を期待して消費する
+    /// Expect and consume a closing parenthesis
     fn expect_rparen(&mut self, context: &str) -> FernResult<()> {
         let loc = self.current_location();
         match self.peek() {
@@ -257,17 +261,17 @@ impl<'a> Parser<'a> {
             }
             _ => Err(FernError::ParseError {
                 loc,
-                message: format!("{context} の閉じ括弧 `)` が必要です"),
+                message: format!("{context} requires a closing `)`"),
             }),
         }
     }
 }
 
-/// 長さ単位を mm に変換する
+/// Convert length units to mm
 fn convert_to_mm(value: f64, unit: &str) -> Result<f64, String> {
-    /// 1 インチ = 25.4 mm
+    /// 1 inch = 25.4 mm
     const INCH_TO_MM: f64 = 25.4;
-    /// 1 フィート = 304.8 mm
+    /// 1 foot = 304.8 mm
     const FOOT_TO_MM: f64 = 304.8;
 
     match unit {
@@ -277,28 +281,28 @@ fn convert_to_mm(value: f64, unit: &str) -> Result<f64, String> {
         "inch" => Ok(value * INCH_TO_MM),
         "ft" => Ok(value * FOOT_TO_MM),
         _ => Err(format!(
-            "未対応の長さ単位 `:{unit}` です。対応単位: :mm, :cm, :m, :inch, :ft"
+            "unsupported length unit `:{unit}`. Supported units: :mm, :cm, :m, :inch, :ft"
         )),
     }
 }
 
-/// 角度単位を rad に変換する
+/// Convert angle units to rad
 fn convert_to_rad(value: f64, unit: &str) -> Result<f64, String> {
     match unit {
         "rad" => Ok(value),
         "deg" => Ok(value * std::f64::consts::PI / 180.0),
         "turn" => Ok(value * 2.0 * std::f64::consts::PI),
         _ => Err(format!(
-            "未対応の角度単位 `:{unit}` です。対応単位: :rad, :deg, :turn"
+            "unsupported angle unit `:{unit}`. Supported units: :rad, :deg, :turn"
         )),
     }
 }
 
-/// ソースコードを S 式のリストにパースする
+/// Parse source code into a list of S-expressions
 ///
 /// # Errors
 ///
-/// 構文エラーがある場合、`FernError` を返す。
+/// Returns `FernError` if the source contains syntax errors.
 pub fn parse(source: &str) -> FernResult<Vec<Value>> {
     let tokens = tokenize(source)?;
     let mut parser = Parser::new(tokens, source);
@@ -327,7 +331,7 @@ mod tests {
                 assert_eq!(items[1], Value::Int(1));
                 assert_eq!(items[2], Value::Int(2));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 
@@ -340,7 +344,7 @@ mod tests {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(&items[1], Value::List(_)));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 
@@ -364,7 +368,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         match &result[0] {
             Value::Length(v) => assert!((v - 25.4).abs() < 1e-10),
-            other => panic!("期待: Length、実際: {other:?}"),
+            other => panic!("expected Length, got {other:?}"),
         }
     }
 
@@ -373,7 +377,7 @@ mod tests {
         let result = parse("#u(1.0 :inch)").unwrap();
         match &result[0] {
             Value::Length(v) => assert!((v - 25.4).abs() < 1e-10),
-            other => panic!("期待: Length、実際: {other:?}"),
+            other => panic!("expected Length, got {other:?}"),
         }
     }
 
@@ -382,7 +386,7 @@ mod tests {
         let result = parse("#a(90 :deg)").unwrap();
         match &result[0] {
             Value::Angle(v) => assert!((v - std::f64::consts::FRAC_PI_2).abs() < 1e-10),
-            other => panic!("期待: Angle、実際: {other:?}"),
+            other => panic!("expected Angle, got {other:?}"),
         }
     }
 
@@ -408,7 +412,7 @@ mod tests {
                 assert_eq!(items[1], Value::Symbol("::".to_string()));
                 assert_eq!(items[2], Value::Symbol("length".to_string()));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 
@@ -428,7 +432,7 @@ mod tests {
                 assert_eq!(loc.line, 1);
                 assert_eq!(loc.col, 1);
             }
-            other => panic!("想定外のエラー: {other:?}"),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 
@@ -451,7 +455,7 @@ mod tests {
                 assert_eq!(items[1], Value::Symbol("+m3-diameter+".to_string()));
                 assert_eq!(items[2], Value::Float(3.0));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 
@@ -470,7 +474,7 @@ mod tests {
                 assert_eq!(items[1], Value::Int(10));
                 assert_eq!(items[2], Value::Int(3));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 
@@ -487,7 +491,7 @@ mod tests {
         let result = parse(source);
         assert!(
             result.is_ok(),
-            "MVP コードのパースに失敗: {:?}",
+            "failed to parse MVP code: {:?}",
             result.err()
         );
         let exprs = result.unwrap();
@@ -498,7 +502,7 @@ mod tests {
                 assert_eq!(items[1], Value::Symbol("my-part".to_string()));
                 assert_eq!(items[2], Value::Str("テスト用パーツ".to_string()));
             }
-            other => panic!("期待: List、実際: {other:?}"),
+            other => panic!("expected List, got {other:?}"),
         }
     }
 }

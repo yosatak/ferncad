@@ -1,6 +1,6 @@
-//! ferncad 値型・形状ノード定義
+//! ferncad value types and shape node definitions
 //!
-//! 評価器が扱うすべての値と、CSG ツリーのノード型を定義する。
+//! Defines all values handled by the evaluator and CSG tree node types.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -8,51 +8,51 @@ use std::sync::Arc;
 
 use crate::error::SourceLocation;
 
-/// 評価器が返す値の型
+/// Value type returned by the evaluator
 #[derive(Debug, Clone)]
 pub enum Value {
-    /// 整数
+    /// Integer
     Int(i64),
-    /// 浮動小数点数
+    /// Floating-point number
     Float(f64),
-    /// 長さ（mm 換算で正規化済み）
+    /// Length (normalized to mm)
     Length(f64),
-    /// 角度（rad 換算で正規化済み）
+    /// Angle (normalized to rad)
     Angle(f64),
-    /// 3D ベクトル
+    /// 3D vector
     Vec3([f64; 3]),
-    /// 3D 点
+    /// 3D point
     Point3([f64; 3]),
-    /// 文字列
+    /// String
     Str(String),
-    /// シンボル（引用時のみ値として存在）
+    /// Symbol (exists as a value only when quoted)
     Symbol(String),
-    /// キーワード
+    /// Keyword
     Keyword(String),
-    /// ブール値（`t` = true, `nil` = false）
+    /// Boolean (`t` = true, `nil` = false)
     Bool(bool),
-    /// 空値
+    /// Nil value
     Nil,
-    /// リスト
+    /// List
     List(Vec<Value>),
-    /// CSG 形状ノード
+    /// CSG shape node
     Shape(Arc<ShapeNode>),
-    /// 組み込み関数
+    /// Built-in function
     BuiltinFn(BuiltinFnDef),
-    /// ユーザー定義関数（クロージャ）
+    /// User-defined function (closure)
     Lambda(Arc<LambdaDef>),
-    /// パーツ定義
+    /// Part definition
     PartDef(Arc<PartDef>),
-    /// 面への参照
+    /// Face reference
     FaceRef(crate::face::FaceRef),
-    /// 軸への参照
+    /// Axis reference
     AxisRef(crate::face::AxisRef),
-    /// アセンブリ定義
+    /// Assembly definition
     Assembly(Arc<crate::assembly::AssemblyDef>),
 }
 
 impl Value {
-    /// 数値として取得する（Int → f64 変換を含む）
+    /// Get as a number (includes Int to f64 conversion)
     pub fn as_number(&self) -> Option<f64> {
         match self {
             Value::Int(n) => Some(*n as f64),
@@ -63,14 +63,14 @@ impl Value {
         }
     }
 
-    /// 真偽値として評価する（CL 準拠: nil と Bool(false) のみ偽）
+    /// Evaluate as a boolean (CL-compliant: only nil and Bool(false) are falsy)
     pub fn is_truthy(&self) -> bool {
         !matches!(self, Value::Nil | Value::Bool(false))
     }
 
-    /// 型アノテーション名に対して値が適合するか検査する
+    /// Check whether a value conforms to a type annotation name
     ///
-    /// 数値型（int, float）は length や angle にも暗黙変換可能とする。
+    /// Numeric types (int, float) can be implicitly converted to length or angle.
     pub fn matches_type(&self, type_name: &str) -> bool {
         match type_name {
             "int" => matches!(self, Value::Int(_)),
@@ -85,32 +85,32 @@ impl Value {
             "bool" => matches!(self, Value::Bool(_)),
             "shape" => matches!(self, Value::Shape(_)),
             "list" => matches!(self, Value::List(_)),
-            _ => true, // 不明な型名は常に適合（Phase 2 の安全策）
+            _ => true, // Unknown type names always match (Phase 2 safety measure)
         }
     }
 
-    /// 型名を日本語で返す
-    pub fn type_name_ja(&self) -> &'static str {
+    /// Return the type name
+    pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Int(_) => "整数",
-            Value::Float(_) => "浮動小数点数",
-            Value::Length(_) => "長さ",
-            Value::Angle(_) => "角度",
-            Value::Vec3(_) => "ベクトル",
-            Value::Point3(_) => "点",
-            Value::Str(_) => "文字列",
-            Value::Symbol(_) => "シンボル",
-            Value::Keyword(_) => "キーワード",
-            Value::Bool(_) => "ブール値",
+            Value::Int(_) => "integer",
+            Value::Float(_) => "float",
+            Value::Length(_) => "length",
+            Value::Angle(_) => "angle",
+            Value::Vec3(_) => "vector",
+            Value::Point3(_) => "point",
+            Value::Str(_) => "string",
+            Value::Symbol(_) => "symbol",
+            Value::Keyword(_) => "keyword",
+            Value::Bool(_) => "boolean",
             Value::Nil => "nil",
-            Value::List(_) => "リスト",
-            Value::Shape(_) => "形状",
-            Value::BuiltinFn(_) => "組み込み関数",
-            Value::Lambda(_) => "関数",
-            Value::PartDef(_) => "パーツ定義",
-            Value::FaceRef(_) => "面参照",
-            Value::AxisRef(_) => "軸参照",
-            Value::Assembly(_) => "アセンブリ",
+            Value::List(_) => "list",
+            Value::Shape(_) => "shape",
+            Value::BuiltinFn(_) => "builtin",
+            Value::Lambda(_) => "function",
+            Value::PartDef(_) => "part",
+            Value::FaceRef(_) => "face-ref",
+            Value::AxisRef(_) => "axis-ref",
+            Value::Assembly(_) => "assembly",
         }
     }
 }
@@ -176,12 +176,12 @@ impl PartialEq for Value {
     }
 }
 
-/// 組み込み関数の定義
+/// Built-in function definition
 #[derive(Clone)]
 pub struct BuiltinFnDef {
-    /// 関数名
+    /// Function name
     pub name: String,
-    /// 実装
+    /// Implementation
     pub func: fn(&[Value], &SourceLocation) -> Result<Value, crate::error::FernError>,
 }
 
@@ -191,113 +191,113 @@ impl fmt::Debug for BuiltinFnDef {
     }
 }
 
-/// ユーザー定義関数
+/// User-defined function
 #[derive(Debug, Clone)]
 pub struct LambdaDef {
-    /// パラメータ名リスト
+    /// Parameter name list
     pub params: Vec<String>,
-    /// 関数本体（S式のリスト）
+    /// Function body (list of S-expressions)
     pub body: Vec<Value>,
-    /// 定義時の環境 ID（クロージャ用）
+    /// Environment ID at definition time (for closures)
     pub env_id: usize,
 }
 
-/// パーツ定義
+/// Part definition
 #[derive(Debug, Clone)]
 pub struct PartDef {
-    /// パーツ名
+    /// Part name
     pub name: String,
-    /// ドキュメント文字列
+    /// Documentation string
     pub docstring: String,
-    /// メタデータ
+    /// Metadata
     pub meta: HashMap<String, Value>,
-    /// パラメータ仕様
+    /// Parameter specifications
     pub params: Vec<ParamSpec>,
-    /// 名前付き面の宣言
+    /// Named face declarations
     pub faces: Vec<crate::face::FaceSpec>,
-    /// 名前付き軸の宣言
+    /// Named axis declarations
     pub axes: Vec<crate::face::AxisSpec>,
-    /// 本体（遅延評価用 S 式）
+    /// Body (S-expressions for lazy evaluation)
     pub body: Vec<Value>,
-    /// 定義時の環境 ID
+    /// Environment ID at definition time
     pub env_id: usize,
 }
 
-/// パーツパラメータの仕様
+/// Part parameter specification
 #[derive(Debug, Clone)]
 pub struct ParamSpec {
-    /// パラメータ名
+    /// Parameter name
     pub name: String,
-    /// 型アノテーション（オプション）
+    /// Type annotation (optional)
     pub type_annotation: Option<String>,
-    /// デフォルト値（オプション）
+    /// Default value (optional)
     pub default: Option<Value>,
-    /// ドキュメント文字列（オプション）
+    /// Documentation string (optional)
     pub doc: Option<String>,
 }
 
-/// デフォルトのセグメント数
-/// デフォルトのセグメント数（BSP CSG のパフォーマンスとのバランス）
+/// Default segment count
+/// Default segment count (balanced with BSP CSG performance)
 pub const DEFAULT_SEGMENTS: u32 = 16;
 
-/// CSG ツリーのノード（イミュータブル・参照カウント）
+/// CSG tree node (immutable, reference-counted)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShapeNode {
-    // === プリミティブ ===
-    /// 直方体
+    // === Primitives ===
+    /// Box
     Box { width: f64, depth: f64, height: f64 },
-    /// 球
+    /// Sphere
     Sphere { radius: f64, segments: u32 },
-    /// 円柱
+    /// Cylinder
     Cylinder {
         radius: f64,
         height: f64,
         segments: u32,
     },
-    /// 円錐
+    /// Cone
     Cone {
         radius_bottom: f64,
         radius_top: f64,
         height: f64,
         segments: u32,
     },
-    /// トーラス
+    /// Torus
     Torus {
         radius_major: f64,
         radius_minor: f64,
         segments: u32,
     },
-    /// 多角柱
+    /// Prism
     Prism {
         sides: u32,
         radius: f64,
         height: f64,
     },
 
-    // === CSG 演算 ===
-    /// 合算
+    // === CSG Operations ===
+    /// Union
     Union { children: Vec<Arc<ShapeNode>> },
-    /// 差分（第1要素から他を差し引く）
+    /// Difference (subtract others from the first element)
     Difference {
         base: Arc<ShapeNode>,
         cutters: Vec<Arc<ShapeNode>>,
     },
-    /// 交差
+    /// Intersection
     Intersection { children: Vec<Arc<ShapeNode>> },
 
-    // === 変換 ===
-    /// 移動
+    // === Transforms ===
+    /// Translation
     Translate {
         shape: Arc<ShapeNode>,
         offset: [f64; 3],
     },
-    /// 回転（軸 + 角度 rad）
+    /// Rotation (axis + angle in rad)
     Rotate {
         shape: Arc<ShapeNode>,
         axis: [f64; 3],
         angle_rad: f64,
     },
-    /// スケール
+    /// Scale
     Scale {
         shape: Arc<ShapeNode>,
         factors: [f64; 3],

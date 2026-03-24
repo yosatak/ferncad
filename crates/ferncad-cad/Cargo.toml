@@ -2,14 +2,8 @@
 name = "ferncad-cad"
 version = "0.1.0"
 edition = "2021"
-description = "ferncad CAD カーネル: プリミティブ生成・CSG・STL エクスポート"
+description = "ferncad CAD kernel: primitive generation, CSG, STL export"
 
 [dependencies]
 ferncad-core = { path = "../ferncad-core" }
 thiserror = { workspace = true }
-truck-modeling = { workspace = true }
-truck-topology = { workspace = true }
-truck-polymesh = { workspace = true }
-truck-meshalgo = { workspace = true }
-truck-shapeops = { workspace = true }
-truck-stepio = { workspace = true }

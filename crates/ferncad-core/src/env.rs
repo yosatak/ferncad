@@ -1,7 +1,7 @@
-//! ferncad 環境（スコープ）管理
+//! ferncad environment (scope) management
 //!
-//! レキシカルスコープを連鎖で管理する。
-//! クロージャをサポートするため `Rc<RefCell<Env>>` を使用。
+//! Manages lexical scopes using a chain structure.
+//! Uses `Rc<RefCell<Env>>` to support closures.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -10,27 +10,27 @@ use std::rc::Rc;
 use crate::error::{FernError, FernResult, SourceLocation};
 use crate::types::Value;
 
-/// 環境（スコープ）
+/// Environment (scope)
 #[derive(Debug)]
 pub struct Env {
-    /// この環境の ID（デバッグ・参照用）
+    /// ID of this environment (for debugging and referencing)
     pub id: usize,
-    /// 変数バインディング
+    /// Variable bindings
     bindings: HashMap<String, Value>,
-    /// 親環境（レキシカルスコープ）
+    /// Parent environment (lexical scope)
     parent: Option<Rc<RefCell<Env>>>,
 }
 
-/// 環境 ID のグローバルカウンター
+/// Global counter for environment IDs
 static ENV_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// 新しい環境 ID を生成する
+/// Generate a new environment ID
 fn next_env_id() -> usize {
     ENV_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Env {
-    /// 新しいグローバル環境を作成する
+    /// Create a new global environment
     pub fn new_global() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self {
             id: next_env_id(),
@@ -39,7 +39,7 @@ impl Env {
         }))
     }
 
-    /// 親環境を持つ子環境を作成する
+    /// Create a child environment with a parent
     pub fn new_child(parent: Rc<RefCell<Env>>) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self {
             id: next_env_id(),
@@ -48,12 +48,12 @@ impl Env {
         }))
     }
 
-    /// 変数を定義する（現在のスコープに追加）
+    /// Define a variable (add to the current scope)
     pub fn define(&mut self, name: String, value: Value) {
         self.bindings.insert(name, value);
     }
 
-    /// 変数を検索する（スコープチェーンを遡る）
+    /// Look up a variable (traversing the scope chain)
     pub fn lookup(&self, name: &str, loc: &SourceLocation) -> FernResult<Value> {
         if let Some(value) = self.bindings.get(name) {
             return Ok(value.clone());
@@ -67,7 +67,7 @@ impl Env {
         })
     }
 
-    /// 変数が定義されているか確認する
+    /// Check whether a variable is defined
     pub fn is_defined(&self, name: &str) -> bool {
         if self.bindings.contains_key(name) {
             return true;
@@ -121,7 +121,7 @@ mod tests {
             FernError::UndefinedVariable { name, .. } => {
                 assert_eq!(name, "unknown");
             }
-            _ => panic!("想定外のエラー型"),
+            _ => panic!("unexpected error type"),
         }
     }
 }

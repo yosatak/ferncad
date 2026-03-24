@@ -1,10 +1,10 @@
-//! 三角形メッシュのアフィン変換
+//! Affine transforms for triangle meshes
 //!
-//! translate, rotate, scale を頂点座標に直接適用する。
+//! Applies translate, rotate, and scale directly to vertex coordinates.
 
 use crate::mesh::TriMesh;
 
-/// メッシュを平行移動する
+/// Translate a mesh
 pub fn translate(mesh: &mut TriMesh, offset: [f64; 3]) {
     for v in &mut mesh.vertices {
         v[0] += offset[0];
@@ -13,9 +13,9 @@ pub fn translate(mesh: &mut TriMesh, offset: [f64; 3]) {
     }
 }
 
-/// メッシュを軸周りに回転する（角度は rad）
+/// Rotate a mesh around an axis (angle in radians)
 ///
-/// Rodrigues の回転公式を使用。
+/// Uses the Rodrigues rotation formula.
 pub fn rotate(mesh: &mut TriMesh, axis: [f64; 3], angle_rad: f64) {
     let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
     if len < 1e-12 {
@@ -30,24 +30,24 @@ pub fn rotate(mesh: &mut TriMesh, axis: [f64; 3], angle_rad: f64) {
         let vy = v[1];
         let vz = v[2];
 
-        // k × v
+        // k x v
         let kxv = [
             k[1] * vz - k[2] * vy,
             k[2] * vx - k[0] * vz,
             k[0] * vy - k[1] * vx,
         ];
 
-        // k · v
+        // k . v
         let kdv = k[0] * vx + k[1] * vy + k[2] * vz;
 
-        // v' = v·cos(a) + (k×v)·sin(a) + k·(k·v)·(1-cos(a))
+        // v' = v*cos(a) + (k x v)*sin(a) + k*(k . v)*(1-cos(a))
         v[0] = vx * cos_a + kxv[0] * sin_a + k[0] * kdv * (1.0 - cos_a);
         v[1] = vy * cos_a + kxv[1] * sin_a + k[1] * kdv * (1.0 - cos_a);
         v[2] = vz * cos_a + kxv[2] * sin_a + k[2] * kdv * (1.0 - cos_a);
     }
 }
 
-/// メッシュをスケーリングする
+/// Scale a mesh
 pub fn scale(mesh: &mut TriMesh, factors: [f64; 3]) {
     for v in &mut mesh.vertices {
         v[0] *= factors[0];
@@ -77,7 +77,7 @@ mod tests {
         let mut mesh = generate_box(10.0, 10.0, 10.0);
         rotate(&mut mesh, [0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2);
         let (min, max) = mesh.bounding_box();
-        // 10x10 の box を 90° Z軸回転 → バウンディングボックスは変わらないはず
+        // A 10x10 box rotated 90 degrees around Z -> bounding box should be unchanged
         assert!((min[0] - (-5.0)).abs() < 1e-8);
         assert!((max[0] - 5.0).abs() < 1e-8);
     }

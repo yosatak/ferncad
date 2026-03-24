@@ -2,7 +2,7 @@
 name = "ferncad-cli"
 version = "0.1.0"
 edition = "2021"
-description = "ferncad CLI ツール"
+description = "ferncad CLI tool"
 
 [dependencies]
 ferncad-core = { path = "../ferncad-core" }

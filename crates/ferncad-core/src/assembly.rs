@@ -1,6 +1,6 @@
-//! アセンブリ・制約の型定義
+//! Assembly and constraint type definitions
 //!
-//! 複数パーツを配置し、面・軸制約で位置決めするデータ構造。
+//! Data structures for placing multiple parts and positioning them via face/axis constraints.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,38 +8,38 @@ use std::sync::Arc;
 use crate::face::{AxisRef, FaceRef};
 use crate::types::{PartDef, Value};
 
-/// アセンブリ定義
+/// Assembly definition
 #[derive(Debug, Clone)]
 pub struct AssemblyDef {
-    /// アセンブリ名
+    /// Assembly name
     pub name: String,
-    /// ドキュメント文字列
+    /// Documentation string
     pub docstring: String,
-    /// 配置されたパーツ
+    /// Placed parts
     pub parts: Vec<PartInstance>,
-    /// 制約リスト
+    /// Constraint list
     pub constraints: Vec<Constraint>,
 }
 
-/// パーツインスタンス（アセンブリ内の配置済みパーツ）
+/// Part instance (a placed part within an assembly)
 #[derive(Debug, Clone)]
 pub struct PartInstance {
-    /// アセンブリ内での名前
+    /// Name within the assembly
     pub name: String,
-    /// パーツ定義への参照
+    /// Reference to part definition
     pub part_def: Arc<PartDef>,
-    /// パラメータ値
+    /// Parameter values
     pub params: HashMap<String, Value>,
-    /// 形状ノード（評価済み）
+    /// Shape node (evaluated)
     pub shape: Option<Arc<crate::types::ShapeNode>>,
-    /// 4x4 変換行列（列優先）
+    /// 4x4 transform matrix (column-major)
     pub transform: [f64; 16],
-    /// 色（RGB 0-1）
+    /// Color (RGB 0-1)
     pub color: [f64; 3],
 }
 
 impl PartInstance {
-    /// 単位行列で初期化された変換を持つインスタンスを作成する
+    /// Create an instance initialized with an identity transform
     pub fn new(name: String, part_def: Arc<PartDef>, params: HashMap<String, Value>) -> Self {
         Self {
             name,
@@ -51,7 +51,7 @@ impl PartInstance {
         }
     }
 
-    /// 平行移動を適用する
+    /// Apply a translation
     pub fn translate(&mut self, offset: [f64; 3]) {
         self.transform[12] += offset[0];
         self.transform[13] += offset[1];
@@ -59,54 +59,54 @@ impl PartInstance {
     }
 }
 
-/// 制約の種類
+/// Constraint types
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    /// 面を合わせる（密着）
+    /// Mate faces (flush contact)
     Mate {
         face1: FaceRef,
         face2: FaceRef,
         offset: f64,
     },
-    /// 軸を揃える
+    /// Align axes
     AlignAxis { axis1: AxisRef, axis2: AxisRef },
-    /// はめ合い
+    /// Fit
     Fit {
         shaft: FaceRef,
         hole: FaceRef,
         clearance: f64,
         fit_type: FitType,
     },
-    /// ジョイント
+    /// Joint
     Joint {
         joint_type: JointType,
         parts: Vec<String>,
     },
 }
 
-/// はめ合いの種類
+/// Fit types
 #[derive(Debug, Clone, PartialEq)]
 pub enum FitType {
-    /// すきまばめ
+    /// Clearance fit
     Clearance,
-    /// しまりばめ
+    /// Interference fit
     Interference,
-    /// 中間ばめ
+    /// Transition fit
     Transition,
 }
 
-/// ジョイントの種類
+/// Joint types
 #[derive(Debug, Clone, PartialEq)]
 pub enum JointType {
-    /// 固定
+    /// Fixed
     Fixed,
-    /// 回転ジョイント
+    /// Revolute joint
     Revolute,
-    /// 直線ジョイント
+    /// Prismatic joint
     Prismatic,
 }
 
-/// 4x4 単位行列を返す
+/// Return a 4x4 identity matrix
 pub fn identity_matrix() -> [f64; 16] {
     [
         1.0, 0.0, 0.0, 0.0, // col 0
@@ -116,19 +116,19 @@ pub fn identity_matrix() -> [f64; 16] {
     ]
 }
 
-/// パーツ色パレット（自動割り当て用）
+/// Part color palette (for auto-assignment)
 const PART_COLORS: &[[f64; 3]] = &[
-    [0.53, 0.53, 0.80], // 青紫
-    [0.80, 0.53, 0.53], // 赤系
-    [0.53, 0.80, 0.53], // 緑系
-    [0.80, 0.73, 0.53], // 黄系
-    [0.53, 0.73, 0.80], // 水色
-    [0.73, 0.53, 0.80], // 紫系
-    [0.80, 0.60, 0.53], // オレンジ系
-    [0.53, 0.80, 0.73], // ターコイズ
+    [0.53, 0.53, 0.80], // blue-violet
+    [0.80, 0.53, 0.53], // red
+    [0.53, 0.80, 0.53], // green
+    [0.80, 0.73, 0.53], // yellow
+    [0.53, 0.73, 0.80], // cyan
+    [0.73, 0.53, 0.80], // purple
+    [0.80, 0.60, 0.53], // orange
+    [0.53, 0.80, 0.73], // turquoise
 ];
 
-/// パーツインデックスから色を取得する
+/// Get a color for a given part index
 pub fn part_color(index: usize) -> [f64; 3] {
     PART_COLORS[index % PART_COLORS.len()]
 }

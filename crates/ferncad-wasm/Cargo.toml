@@ -2,7 +2,7 @@
 name = "ferncad-wasm"
 version = "0.1.0"
 edition = "2021"
-description = "ferncad WASM バインディング"
+description = "ferncad WASM bindings"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -1,103 +1,103 @@
-//! ferncad 字句解析器（Lexer）
+//! ferncad lexer
 //!
-//! `logos` クレートを使いトークン列を生成する。
-//! Common Lisp インスパイアの構文に対応。
+//! Uses the `logos` crate to produce a token stream.
+//! Supports Common Lisp-inspired syntax.
 
 use logos::{Logos, Span};
 
 use crate::error::{offset_to_location, FernError, FernResult, SourceLocation};
 
-/// トークン型
+/// Token type
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n]+")]
 #[logos(skip(r";[^\n]*", allow_greedy = true))]
 pub enum Token {
-    // === 括弧 ===
-    /// 開き括弧 `(`
+    // === Parentheses ===
+    /// Open parenthesis `(`
     #[token("(")]
     LParen,
 
-    /// 閉じ括弧 `)`
+    /// Close parenthesis `)`
     #[token(")")]
     RParen,
 
-    // === 特殊プレフィックス ===
-    /// 単位リテラルプレフィックス `#u`
+    // === Special prefixes ===
+    /// Unit literal prefix `#u`
     #[token("#u")]
     UnitPrefix,
 
-    /// 角度リテラルプレフィックス `#a`
+    /// Angle literal prefix `#a`
     #[token("#a")]
     AnglePrefix,
 
-    /// ベクトルリテラルプレフィックス `#v`
+    /// Vector literal prefix `#v`
     #[token("#v")]
     Vec3Prefix,
 
-    /// 点リテラルプレフィックス `#p`
+    /// Point literal prefix `#p`
     #[token("#p")]
     Point3Prefix,
 
-    // === 型アノテーション ===
-    /// 型アノテーション演算子 `::`
+    // === Type annotation ===
+    /// Type annotation operator `::`
     #[token("::")]
     TypeAnnotation,
 
-    // === リテラル ===
-    /// 浮動小数点数リテラル
+    // === Literals ===
+    /// Floating-point literal
     #[regex(r"-?[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
     Float(f64),
 
-    /// 整数リテラル
+    /// Integer literal
     #[regex(r"-?[0-9]+", |lex| lex.slice().parse::<i64>().ok(), priority = 2)]
     Int(i64),
 
-    /// 文字列リテラル
+    /// String literal
     #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
     Str(String),
 
-    // === キーワード・シンボル ===
-    /// キーワード（`:` で始まる識別子）
+    // === Keywords and symbols ===
+    /// Keyword (identifier starting with `:`)
     #[regex(r":[a-zA-Z][a-zA-Z0-9\-_/]*", |lex| lex.slice()[1..].to_string())]
     Keyword(String),
 
-    /// シンボル（識別子）
-    /// Common Lisp 慣習: `+const+`, `*var*`, `name-with-dash`, `predicate?`
-    /// 比較演算子 `=`, `<`, `>`, `<=`, `>=` もシンボルとして扱う
+    /// Symbol (identifier)
+    /// Common Lisp conventions: `+const+`, `*var*`, `name-with-dash`, `predicate?`
+    /// Comparison operators `=`, `<`, `>`, `<=`, `>=` are also treated as symbols
     #[regex(r"[a-zA-Z_+*!?<>=][a-zA-Z0-9_+*\-/!?.<>=]*", |lex| lex.slice().to_string())]
     Symbol(String),
 
-    // === 算術演算子（単独のシンボルとして） ===
-    /// 単独の `-` （マイナス演算子）
+    // === Arithmetic operators (as standalone symbols) ===
+    /// Standalone `-` (minus operator)
     #[token("-", priority = 1)]
     Minus,
 
-    /// 単独の `/` （除算演算子）
+    /// Standalone `/` (division operator)
     #[token("/", priority = 1)]
     Slash,
 }
 
-/// 文字列リテラルをパースする（ダブルクォートを除去）
+/// Parse a string literal (strip surrounding double quotes)
 fn parse_string(lex: &logos::Lexer<Token>) -> Option<String> {
     let s = lex.slice();
-    // 前後のダブルクォートを除去
+    // Strip surrounding double quotes
     Some(s[1..s.len() - 1].to_string())
 }
 
-/// トークンとその位置情報
+/// Token with its location information
 #[derive(Debug, Clone)]
 pub struct SpannedToken {
-    /// トークン
+    /// Token
     pub token: Token,
-    /// ソースコード上のバイト範囲
+    /// Byte range in source code
     pub span: Span,
 }
 
-/// ソースコードをトークン列に変換する
+/// Convert source code to a token stream
 ///
 /// # Errors
 ///
-/// 不正なトークンが含まれる場合、`FernError::LexError` を返す。
+/// Returns `FernError::LexError` if the source contains invalid tokens.
 pub fn tokenize(source: &str) -> FernResult<Vec<SpannedToken>> {
     let mut tokens = Vec::new();
     let mut lexer = Token::lexer(source);
@@ -122,7 +122,7 @@ pub fn tokenize(source: &str) -> FernResult<Vec<SpannedToken>> {
     Ok(tokens)
 }
 
-/// バイトオフセットからソース位置を取得するヘルパー
+/// Helper to get source location from a byte offset
 pub fn span_to_location(source: &str, span: &Span) -> SourceLocation {
     offset_to_location(source, span.start)
 }
@@ -131,7 +131,7 @@ pub fn span_to_location(source: &str, span: &Span) -> SourceLocation {
 mod tests {
     use super::*;
 
-    /// トークン種別だけを抽出するヘルパー
+    /// Helper to extract only token types
     fn token_types(source: &str) -> Vec<Token> {
         tokenize(source)
             .unwrap()
@@ -306,7 +306,7 @@ mod tests {
     fn test_location_tracking() {
         let source = "(\n  + 1 2)";
         let tokens = tokenize(source).unwrap();
-        // '+' は2行目3列目
+        // '+' is at line 2, column 3
         let plus_loc = span_to_location(source, &tokens[1].span);
         assert_eq!(plus_loc.line, 2);
         assert_eq!(plus_loc.col, 3);
@@ -322,7 +322,7 @@ mod tests {
                 assert_eq!(loc.line, 1);
                 assert_eq!(loc.col, 6);
             }
-            _ => panic!("想定外のエラー型"),
+            _ => panic!("unexpected error type"),
         }
     }
 
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_complex_defpart() {
-        // MVP 完了基準のコードの一部がトークン化できることを確認
+        // Verify that the MVP completion criteria code can be tokenized
         let source = r#"(defpart my-part
   "テスト用パーツ"
   :meta (:category :test :material :steel :description "test")
@@ -351,7 +351,7 @@ mod tests {
         let result = tokenize(source);
         assert!(
             result.is_ok(),
-            "MVP コード例のトークン化に失敗: {:?}",
+            "failed to tokenize MVP code example: {:?}",
             result.err()
         );
     }

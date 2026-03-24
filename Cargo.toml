@@ -8,20 +8,11 @@ members = [
 ]
 
 [workspace.dependencies]
-# パーサー
+# Parser
 logos = "0.16"
 
-# ユーティリティ
+# Utilities
 thiserror = "2"
-ordered-float = "5"
-
-# CAD カーネル (truck)
-truck-modeling = "0.6"
-truck-topology = "0.6"
-truck-polymesh = "0.6"
-truck-meshalgo = "0.4"
-truck-shapeops = "0.4"
-truck-stepio = "0.3"
 
 # WASM
 wasm-bindgen = "0.2"

@@ -1,7 +1,7 @@
 /**
- * CodeMirror 6 エディタ設定
+ * CodeMirror 6 editor setup
  *
- * Lisp 風シンタックスハイライトと括弧マッチングを提供する。
+ * Provides Lisp-style syntax highlighting and bracket matching.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -10,84 +10,54 @@ import { StreamLanguage } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 
-/** ferncad 言語の StreamLanguage 定義 */
+/** ferncad language StreamLanguage definition */
 const fernLanguage = StreamLanguage.define({
   startState() {
     return { depth: 0 };
   },
   token(stream, _state) {
-    // コメント
-    if (stream.match(/;.*/)) {
-      return 'lineComment';
-    }
-    // 空白スキップ
-    if (stream.eatSpace()) {
-      return null;
-    }
-    // 文字列
-    if (stream.match(/"([^"\\]|\\.)*"/)) {
-      return 'string';
-    }
-    // 特殊リテラルプレフィックス
-    if (stream.match(/#[uavp]/)) {
-      return 'meta';
-    }
-    // 型アノテーション
-    if (stream.match(/::/)) {
-      return 'operator';
-    }
-    // キーワード
-    if (stream.match(/:[a-zA-Z][a-zA-Z0-9\-_/]*/)) {
-      return 'atom';
-    }
-    // 数値
-    if (stream.match(/-?[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/)) {
-      return 'number';
-    }
-    // 括弧
-    if (stream.eat('(')) {
-      return 'paren';
-    }
-    if (stream.eat(')')) {
-      return 'paren';
-    }
-    // シンボル（定義キーワード）
-    if (stream.match(/defpart|defun|defmacro|defvar|defmeta/)) {
-      return 'definitionKeyword';
-    }
-    // シンボル（制御フロー）
-    if (stream.match(/let\*|if|cond|quote|lambda|progn/)) {
-      return 'keyword';
-    }
-    // シンボル（CSG）
-    if (stream.match(/union|difference|intersection/)) {
-      return 'operatorKeyword';
-    }
-    // シンボル（プリミティブ）
-    if (stream.match(/box|sphere|cylinder|cone|torus|prism|cube/)) {
-      return 'typeName';
-    }
-    // シンボル（変換）
-    if (stream.match(/translate|rotate|scale|mirror/)) {
-      return 'function';
-    }
-    // 一般シンボル
-    if (stream.match(/[a-zA-Z_+*!?<>=][a-zA-Z0-9_+*\-/!?.<>=]*/)) {
-      return 'variableName';
-    }
-    // その他の文字をスキップ
+    // Comments
+    if (stream.match(/;.*/)) return 'lineComment';
+    // Whitespace
+    if (stream.eatSpace()) return null;
+    // Strings
+    if (stream.match(/"([^"\\]|\\.)*"/)) return 'string';
+    // Special literal prefixes
+    if (stream.match(/#[uavp]/)) return 'meta';
+    // Type annotation
+    if (stream.match(/::/)) return 'operator';
+    // Keywords
+    if (stream.match(/:[a-zA-Z][a-zA-Z0-9\-_/]*/)) return 'atom';
+    // Numbers
+    if (stream.match(/-?[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?/)) return 'number';
+    // Parens
+    if (stream.eat('(')) return 'paren';
+    if (stream.eat(')')) return 'paren';
+    // Definition keywords
+    if (stream.match(/defpart|defun|defmacro|defvar|defmeta/)) return 'definitionKeyword';
+    // Control flow
+    if (stream.match(/let\*|if|cond|quote|lambda|progn/)) return 'keyword';
+    // CSG operators
+    if (stream.match(/union|difference|intersection/)) return 'operatorKeyword';
+    // Primitives
+    if (stream.match(/box|sphere|cylinder|cone|torus|prism|cube/)) return 'typeName';
+    // Transforms
+    if (stream.match(/translate|rotate|scale|mirror/)) return 'function';
+    // General symbols
+    if (stream.match(/[a-zA-Z_+*!?<>=][a-zA-Z0-9_+*\-/!?.<>=]*/)) return 'variableName';
+    // Skip unknown characters
     stream.next();
     return null;
   },
 });
 
-/** ダークテーマのシンタックスハイライト */
+/** Dark theme syntax highlighting */
 const fernHighlightStyle = HighlightStyle.define([
   { tag: tags.lineComment, color: '#6a9955' },
   { tag: tags.string, color: '#ce9178' },
   { tag: tags.number, color: '#b5cea8' },
-  { tag: tags.atom, color: '#9cdcfe' },        // :keywords
-  { tag: tags.meta, color: '#c586c0' },         // #u, #a, etc
+  { tag: tags.atom, color: '#9cdcfe' },
+  { tag: tags.meta, color: '#c586c0' },
   { tag: tags.operator, color: '#d4d4d4' },
   { tag: tags.definitionKeyword, color: '#569cd6', fontWeight: 'bold' },
   { tag: tags.keyword, color: '#c586c0' },
@@ -98,60 +68,44 @@ const fernHighlightStyle = HighlightStyle.define([
   { tag: tags.paren, color: '#808080' },
 ]);
 
-/** ダークテーマ */
+/** Dark theme */
 const darkTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#1e1e1e',
-    color: '#d4d4d4',
-  },
+  '&': { backgroundColor: '#1e1e1e', color: '#d4d4d4' },
   '.cm-content': {
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
     fontSize: '14px',
     caretColor: '#d4d4d4',
   },
-  '.cm-gutters': {
-    backgroundColor: '#1e1e1e',
-    color: '#858585',
-    border: 'none',
-  },
-  '.cm-activeLine': {
-    backgroundColor: '#2a2d2e',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: '#2a2d2e',
-  },
-  '&.cm-focused .cm-cursor': {
-    borderLeftColor: '#d4d4d4',
-  },
+  '.cm-gutters': { backgroundColor: '#1e1e1e', color: '#858585', border: 'none' },
+  '.cm-activeLine': { backgroundColor: '#2a2d2e' },
+  '.cm-activeLineGutter': { backgroundColor: '#2a2d2e' },
+  '&.cm-focused .cm-cursor': { borderLeftColor: '#d4d4d4' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
     backgroundColor: '#264f78',
   },
-  '.cm-matchingBracket': {
-    backgroundColor: '#3e3e3e',
-    outline: '1px solid #888',
-  },
+  '.cm-matchingBracket': { backgroundColor: '#3e3e3e', outline: '1px solid #888' },
 });
 
-/** デフォルトのサンプルコード */
+/** Default sample code */
 const DEFAULT_CODE = `;; ferncad — Lisp CAD Modeler
-;; 評価ボタンまたは Ctrl+Enter で実行
+;; Press Run or Ctrl+Enter to evaluate
 
-;; 基本プリミティブ
+;; Basic primitives
 ; (box :width 20 :depth 20 :height 20)
 ; (sphere :radius 10)
 
-;; CSG演算の例
+;; CSG example
 (difference
   (box :width 20 :depth 20 :height 20)
   (sphere :radius 12))
 `;
 
 /**
- * CodeMirror エディタを作成する
+ * Create a CodeMirror editor instance.
  *
- * @param container - エディタを配置する DOM 要素
- * @param onChange - コード変更時のコールバック
- * @returns EditorView インスタンス
+ * @param container - DOM element to mount the editor in
+ * @param onChange - Callback fired on code changes (debounced 300ms)
+ * @returns EditorView instance
  */
 export function createEditor(
   container: HTMLElement,
@@ -177,13 +131,10 @@ export function createEditor(
     ],
   });
 
-  return new EditorView({
-    state,
-    parent: container,
-  });
+  return new EditorView({ state, parent: container });
 }
 
-/** エディタの現在のコードを取得する */
+/** Get the current code from the editor */
 export function getCode(editor: EditorView): string {
   return editor.state.doc.toString();
 }

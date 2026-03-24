@@ -1,40 +1,40 @@
-//! モジュールシステム
+//! Module system
 //!
-//! `require` で標準ライブラリ（埋め込み）やファイルを読み込み、
-//! `export` でシンボルの公開制御を行う。
+//! Loads standard library (embedded) or files via `require`,
+//! and controls symbol visibility via `export`.
 
 use std::collections::HashMap;
 
-/// 埋め込み標準ライブラリのモジュール定義
+/// Embedded standard library module definition
 struct BuiltinModule {
-    /// モジュール名
+    /// Module name
     name: &'static str,
-    /// ソースコード
+    /// Source code
     source: &'static str,
 }
 
-/// 埋め込み標準ライブラリ
+/// Embedded standard library
 const BUILTIN_MODULES: &[BuiltinModule] = &[BuiltinModule {
     name: "ferncad-std/m3-bolt",
     source: include_str!("../../../std/fasteners/m3-bolt.fern"),
 }];
 
-/// モジュールローダー
+/// Module loader
 #[derive(Debug, Default)]
 pub struct ModuleLoader {
-    /// 読み込み済みモジュールのキャッシュ
+    /// Cache of loaded modules
     loaded: HashMap<String, bool>,
 }
 
 impl ModuleLoader {
-    /// 新しいモジュールローダーを作成する
+    /// Create a new module loader
     pub fn new() -> Self {
         Self {
             loaded: HashMap::new(),
         }
     }
 
-    /// 埋め込みモジュールのソースを検索する
+    /// Search for an embedded module source
     pub fn find_builtin(name: &str) -> Option<&'static str> {
         BUILTIN_MODULES
             .iter()
@@ -42,17 +42,17 @@ impl ModuleLoader {
             .map(|m| m.source)
     }
 
-    /// モジュールが読み込み済みか確認する
+    /// Check whether a module has been loaded
     pub fn is_loaded(&self, name: &str) -> bool {
         self.loaded.contains_key(name)
     }
 
-    /// モジュールを読み込み済みとしてマークする
+    /// Mark a module as loaded
     pub fn mark_loaded(&mut self, name: &str) {
         self.loaded.insert(name.to_string(), true);
     }
 
-    /// 利用可能な埋め込みモジュール名の一覧を返す
+    /// Return a list of available embedded module names
     pub fn available_modules() -> Vec<&'static str> {
         BUILTIN_MODULES.iter().map(|m| m.name).collect()
     }

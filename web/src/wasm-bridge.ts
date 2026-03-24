@@ -1,14 +1,13 @@
 /**
- * WASM ブリッジレイヤー
+ * WASM bridge layer
  *
- * ferncad-wasm の初期化と呼び出しをラップする。
+ * Wraps ferncad-wasm initialization and calls.
  */
 
 import init, {
   evaluate as wasmEvaluate,
   evaluate_parts as wasmEvaluateParts,
   export_stl as wasmExportStl,
-  export_step as wasmExportStep,
   check_syntax as wasmCheckSyntax,
 } from '../pkg/ferncad_wasm.js';
 
@@ -16,20 +15,20 @@ import type { PartMeshData } from './viewer';
 
 let initialized = false;
 
-/** WASM モジュールを初期化する */
+/** Initialize the WASM module */
 export async function initWasm(): Promise<void> {
   if (initialized) return;
   await init();
   initialized = true;
 }
 
-/** 評価結果のメッシュデータ */
+/** Mesh data from evaluation */
 export interface MeshData {
   positions: Float32Array;
   normals: Float32Array;
 }
 
-/** ソースコードを評価してメッシュデータを取得する */
+/** Evaluate source code and get mesh data */
 export function evaluateCode(source: string): MeshData | { error: string } {
   try {
     const combined: Float32Array = wasmEvaluate(source);
@@ -42,12 +41,12 @@ export function evaluateCode(source: string): MeshData | { error: string } {
   }
 }
 
-/** パーツ別メッシュデータ */
+/** Per-part mesh data result */
 export interface PartsResult {
   parts: PartMeshData[];
 }
 
-/** ソースコードを評価してパーツ別メッシュデータを取得する */
+/** Evaluate source code and get per-part mesh data */
 export function evaluateParts(source: string): PartsResult | { error: string } {
   try {
     const json = wasmEvaluateParts(source);
@@ -69,7 +68,7 @@ export function evaluateParts(source: string): PartsResult | { error: string } {
   }
 }
 
-/** ソースコードをSTLバイナリとしてエクスポートする */
+/** Export source code as binary STL */
 export function exportStl(source: string): Uint8Array | { error: string } {
   try {
     return wasmExportStl(source);
@@ -78,16 +77,7 @@ export function exportStl(source: string): Uint8Array | { error: string } {
   }
 }
 
-/** ソースコードをSTEPバイナリとしてエクスポートする */
-export function exportStep(source: string): Uint8Array | { error: string } {
-  try {
-    return wasmExportStep(source);
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
-/** 構文チェックのみ行う */
+/** Check syntax only */
 export function checkSyntax(source: string): string {
   return wasmCheckSyntax(source);
 }
