@@ -1,0 +1,25 @@
+{
+  "name": "ferncad",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates"
+      ]
+    }
+  },
+  "postCreateCommand": ".devcontainer/setup.sh",
+  "postAttachCommand": "[ -f .devcontainer/personal/setup.sh ] && bash .devcontainer/personal/setup.sh || true",
+  "containerEnv": {
+    "HOST_UID": "${localEnv:UID}",
+    "HOST_GID": "${localEnv:GID}"
+  },
+  "remoteUser": "dev"
+}

@@ -1,0 +1,8 @@
+/target/
+/web/pkg/
+/web/node_modules/
+*.stl
+*.step
+
+# Personal dev environment (LLM agents, etc.)
+.devcontainer/personal/
