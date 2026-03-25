@@ -43,6 +43,10 @@ pub enum Value {
     Lambda(Arc<LambdaDef>),
     /// パーツ定義
     PartDef(Arc<PartDef>),
+    /// 面への参照
+    FaceRef(crate::face::FaceRef),
+    /// 軸への参照
+    AxisRef(crate::face::AxisRef),
 }
 
 impl Value {
@@ -60,6 +64,27 @@ impl Value {
     /// 真偽値として評価する（CL 準拠: nil と Bool(false) のみ偽）
     pub fn is_truthy(&self) -> bool {
         !matches!(self, Value::Nil | Value::Bool(false))
+    }
+
+    /// 型アノテーション名に対して値が適合するか検査する
+    ///
+    /// 数値型（int, float）は length や angle にも暗黙変換可能とする。
+    pub fn matches_type(&self, type_name: &str) -> bool {
+        match type_name {
+            "int" => matches!(self, Value::Int(_)),
+            "float" => matches!(self, Value::Float(_) | Value::Int(_)),
+            "number" => self.as_number().is_some(),
+            "length" => matches!(self, Value::Length(_) | Value::Float(_) | Value::Int(_)),
+            "angle" => matches!(self, Value::Angle(_) | Value::Float(_) | Value::Int(_)),
+            "vec3" => matches!(self, Value::Vec3(_)),
+            "point3" => matches!(self, Value::Point3(_)),
+            "string" => matches!(self, Value::Str(_)),
+            "keyword" => matches!(self, Value::Keyword(_)),
+            "bool" => matches!(self, Value::Bool(_)),
+            "shape" => matches!(self, Value::Shape(_)),
+            "list" => matches!(self, Value::List(_)),
+            _ => true, // 不明な型名は常に適合（Phase 2 の安全策）
+        }
     }
 
     /// 型名を日本語で返す
@@ -81,6 +106,8 @@ impl Value {
             Value::BuiltinFn(_) => "組み込み関数",
             Value::Lambda(_) => "関数",
             Value::PartDef(_) => "パーツ定義",
+            Value::FaceRef(_) => "面参照",
+            Value::AxisRef(_) => "軸参照",
         }
     }
 }
@@ -114,6 +141,8 @@ impl fmt::Display for Value {
             Value::BuiltinFn(def) => write!(f, "<builtin:{}>", def.name),
             Value::Lambda(_) => write!(f, "<lambda>"),
             Value::PartDef(def) => write!(f, "<part:{}>", def.name),
+            Value::FaceRef(r) => write!(f, "<face:{}:{}>", r.instance_name, r.face_name),
+            Value::AxisRef(r) => write!(f, "<axis:{}:{}>", r.instance_name, r.axis_name),
         }
     }
 }
@@ -136,6 +165,8 @@ impl PartialEq for Value {
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Vec3(a), Value::Vec3(b)) => a == b,
             (Value::Point3(a), Value::Point3(b)) => a == b,
+            (Value::FaceRef(a), Value::FaceRef(b)) => a == b,
+            (Value::AxisRef(a), Value::AxisRef(b)) => a == b,
             _ => false,
         }
     }
@@ -178,6 +209,10 @@ pub struct PartDef {
     pub meta: HashMap<String, Value>,
     /// パラメータ仕様
     pub params: Vec<ParamSpec>,
+    /// 名前付き面の宣言
+    pub faces: Vec<crate::face::FaceSpec>,
+    /// 名前付き軸の宣言
+    pub axes: Vec<crate::face::AxisSpec>,
     /// 本体（遅延評価用 S 式）
     pub body: Vec<Value>,
     /// 定義時の環境 ID

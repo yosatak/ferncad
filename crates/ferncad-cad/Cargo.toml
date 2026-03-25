@@ -7,3 +7,9 @@ description = "ferncad CAD カーネル: プリミティブ生成・CSG・STL �
 [dependencies]
 ferncad-core = { path = "../ferncad-core" }
 thiserror = { workspace = true }
+truck-modeling = { workspace = true }
+truck-topology = { workspace = true }
+truck-polymesh = { workspace = true }
+truck-meshalgo = { workspace = true }
+truck-shapeops = { workspace = true }
+truck-stepio = { workspace = true }

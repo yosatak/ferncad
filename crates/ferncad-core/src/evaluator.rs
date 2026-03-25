@@ -89,6 +89,7 @@ impl Evaluator {
                 "defvar" => return self.eval_defvar(items, env),
                 "defun" => return self.eval_defun(items, env),
                 "defpart" => return self.eval_defpart(items, env),
+                "defmeta" => return self.eval_defmeta(items, env),
                 "let*" => return self.eval_let_star(items, env),
                 "if" => return self.eval_if(items, env),
                 "lambda" => return self.eval_lambda(items, env),
@@ -383,6 +384,8 @@ impl Evaluator {
 
         let mut meta = HashMap::new();
         let mut params = Vec::new();
+        let mut faces = Vec::new();
+        let mut axes = Vec::new();
         let mut body = Vec::new();
 
         let mut i = kw_start;
@@ -399,6 +402,18 @@ impl Evaluator {
                         i += 1;
                         if i < items.len() {
                             params = self.parse_param_specs(&items[i])?;
+                        }
+                    }
+                    "faces" => {
+                        i += 1;
+                        if i < items.len() {
+                            faces = self.parse_face_specs(&items[i])?;
+                        }
+                    }
+                    "axes" => {
+                        i += 1;
+                        if i < items.len() {
+                            axes = self.parse_axis_specs(&items[i])?;
                         }
                     }
                     "body" => {
@@ -421,6 +436,8 @@ impl Evaluator {
             name: name.clone(),
             docstring,
             meta,
+            faces,
+            axes,
             params,
             body,
             env_id,
@@ -524,6 +541,75 @@ impl Evaluator {
         Ok(specs)
     }
 
+    /// `:faces` 仕様をパースする
+    fn parse_face_specs(&self, expr: &Value) -> FernResult<Vec<crate::face::FaceSpec>> {
+        let items = match expr {
+            Value::List(items) => items,
+            _ => return Ok(Vec::new()),
+        };
+        let mut specs = Vec::new();
+        for item in items {
+            if let Value::List(pair) = item {
+                if let Some(Value::Keyword(name)) = pair.first() {
+                    let doc = pair.get(1).and_then(|v| {
+                        if let Value::Str(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    });
+                    specs.push(crate::face::FaceSpec {
+                        name: name.clone(),
+                        doc,
+                        normal: None,
+                    });
+                }
+            }
+        }
+        Ok(specs)
+    }
+
+    /// `:axes` 仕様をパースする
+    fn parse_axis_specs(&self, expr: &Value) -> FernResult<Vec<crate::face::AxisSpec>> {
+        let items = match expr {
+            Value::List(items) => items,
+            _ => return Ok(Vec::new()),
+        };
+        let mut specs = Vec::new();
+        for item in items {
+            if let Value::List(pair) = item {
+                if let Some(Value::Keyword(name)) = pair.first() {
+                    let doc = pair.get(1).and_then(|v| {
+                        if let Value::Str(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    });
+                    specs.push(crate::face::AxisSpec {
+                        name: name.clone(),
+                        doc,
+                        direction: None,
+                    });
+                }
+            }
+        }
+        Ok(specs)
+    }
+
+    /// `(defmeta :key val ...)` を評価する
+    fn eval_defmeta(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let meta = self.parse_meta(&Value::List(items[1..].to_vec()))?;
+        let meta_value = Value::List(
+            meta.iter()
+                .flat_map(|(k, v)| vec![Value::Keyword(k.clone()), v.clone()])
+                .collect(),
+        );
+        env.borrow_mut()
+            .define("*file-meta*".to_string(), meta_value.clone());
+        Ok(meta_value)
+    }
+
     /// Lambda をパラメータに適用する
     fn apply_lambda(
         &mut self,
@@ -615,6 +701,16 @@ impl Evaluator {
                     ),
                 });
             };
+            // 型アノテーションがある場合はチェック
+            if let Some(ref type_name) = param.type_annotation {
+                if !value.matches_type(type_name) {
+                    return Err(FernError::TypeError {
+                        loc: loc.clone(),
+                        expected: type_name.clone(),
+                        actual: value.type_name_ja().to_string(),
+                    });
+                }
+            }
             part_env.borrow_mut().define(param.name.clone(), value);
         }
 
@@ -717,6 +813,10 @@ impl Evaluator {
         // 単位変換
         self.register_builtin("to-mm", builtin_to_mm);
         self.register_builtin("to-rad", builtin_to_rad);
+
+        // 面・軸参照
+        self.register_builtin("face", builtin_face);
+        self.register_builtin("axis", builtin_axis);
     }
 
     /// 組み込み関数を登録する
@@ -1335,6 +1435,74 @@ fn builtin_to_rad(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     Ok(Value::Float(v))
 }
 
+/// `(face instance-keyword :face-name)` — 面への参照を返す
+fn builtin_face(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`face` は (face :インスタンス名 :面名) の形式が必要です".to_string(),
+        });
+    }
+    let instance_name = match &args[0] {
+        Value::Keyword(k) => k.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "キーワード".to_string(),
+                actual: args[0].type_name_ja().to_string(),
+            });
+        }
+    };
+    let face_name = match &args[1] {
+        Value::Keyword(k) => k.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "キーワード".to_string(),
+                actual: args[1].type_name_ja().to_string(),
+            });
+        }
+    };
+    Ok(Value::FaceRef(crate::face::FaceRef {
+        instance_name,
+        face_name,
+    }))
+}
+
+/// `(axis instance-keyword :axis-name)` — 軸への参照を返す
+fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`axis` は (axis :インスタンス名 :軸名) の形式が必要です".to_string(),
+        });
+    }
+    let instance_name = match &args[0] {
+        Value::Keyword(k) => k.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "キーワード".to_string(),
+                actual: args[0].type_name_ja().to_string(),
+            });
+        }
+    };
+    let axis_name = match &args[1] {
+        Value::Keyword(k) => k.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "キーワード".to_string(),
+                actual: args[1].type_name_ja().to_string(),
+            });
+        }
+    };
+    Ok(Value::AxisRef(crate::face::AxisRef {
+        instance_name,
+        axis_name,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1667,5 +1835,97 @@ mod tests {
             ),
             Value::Float(15.0)
         );
+    }
+
+    #[test]
+    fn test_type_check_defpart_accepts_valid() {
+        // length 型に数値を渡す → OK
+        let result = eval(
+            r#"
+            (defpart p "t"
+              :params ((r :: length :default 5 :doc "r"))
+              :body (sphere :radius r))
+            (p :r 10)
+            "#,
+        );
+        assert!(matches!(result, Value::Shape(_)));
+    }
+
+    #[test]
+    fn test_type_check_defpart_rejects_invalid() {
+        // length 型に文字列を渡す → 型エラー
+        let err = eval_err(
+            r#"
+            (defpart p "t"
+              :params ((r :: length :default 5 :doc "r"))
+              :body (sphere :radius r))
+            (p :r "not-a-number")
+            "#,
+        );
+        assert!(matches!(err, FernError::TypeError { .. }));
+    }
+
+    #[test]
+    fn test_type_check_keyword_param() {
+        // keyword 型にキーワードを渡す → OK
+        let result = eval(
+            r#"
+            (defpart p "t"
+              :params ((finish :: keyword :default :none :doc "f"))
+              :body (box :width 10 :depth 10 :height 10))
+            (p :finish :zinc)
+            "#,
+        );
+        assert!(matches!(result, Value::Shape(_)));
+    }
+
+    #[test]
+    fn test_defmeta() {
+        let result = eval(
+            r#"
+            (defmeta :title "Test" :version "1.0.0" :author "test")
+            *file-meta*
+            "#,
+        );
+        assert!(matches!(result, Value::List(_)));
+    }
+
+    #[test]
+    fn test_defpart_with_faces_axes() {
+        let result = eval(
+            r#"
+            (defpart bolt "ボルト"
+              :faces ((:head-top "頭部上面") (:head-bottom "着座面"))
+              :axes ((:center "中心軸"))
+              :params ((r :: length :default 1.5 :doc "r"))
+              :body (cylinder :radius r :height 10))
+            (bolt)
+            "#,
+        );
+        assert!(matches!(result, Value::Shape(_)));
+    }
+
+    #[test]
+    fn test_face_ref() {
+        let result = eval("(face :bolt :head-top)");
+        match result {
+            Value::FaceRef(r) => {
+                assert_eq!(r.instance_name, "bolt");
+                assert_eq!(r.face_name, "head-top");
+            }
+            other => panic!("期待: FaceRef、実際: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_axis_ref() {
+        let result = eval("(axis :bolt :center)");
+        match result {
+            Value::AxisRef(r) => {
+                assert_eq!(r.instance_name, "bolt");
+                assert_eq!(r.axis_name, "center");
+            }
+            other => panic!("期待: AxisRef、実際: {other:?}"),
+        }
     }
 }

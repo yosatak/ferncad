@@ -6,6 +6,7 @@
 pub mod env;
 pub mod error;
 pub mod evaluator;
+pub mod face;
 pub mod lexer;
 pub mod parser;
 pub mod types;

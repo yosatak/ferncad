@@ -1,7 +1,8 @@
 //! ferncad CAD カーネル
 //!
-//! プリミティブ生成・CSG 演算・変換・STL エクスポートを提供する。
+//! プリミティブ生成・CSG 演算・変換・STL エクスポート・BREP パイプラインを提供する。
 
+pub mod brep;
 pub mod bsp;
 pub mod export;
 pub mod mesh;
