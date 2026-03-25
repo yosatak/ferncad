@@ -153,6 +153,14 @@ fn shape_to_solid_inner(node: &ShapeNode, allow_cavity_fallback: bool) -> FernRe
             segments: _,
         } => build_revolve(profile, *angle_rad),
 
+        ShapeNode::Sweep { .. } => Err(FernError::CadError {
+            message: "BREP sweep not yet supported, using mesh fallback".to_string(),
+        }),
+
+        ShapeNode::Loft { .. } => Err(FernError::CadError {
+            message: "BREP loft not yet supported, using mesh fallback".to_string(),
+        }),
+
         ShapeNode::Chamfer { .. } => Err(FernError::CadError {
             message: "BREP chamfer not supported, using mesh fallback".to_string(),
         }),

@@ -12,19 +12,24 @@ use crate::mesh::TriMesh;
 use crate::primitives;
 use crate::transform;
 
-/// Minimum segments for curved primitives used in BSP CSG.
+/// Default minimum segments for curved primitives used in BSP CSG.
 /// 32 gives a good balance: visually smooth, and BSP stays fast.
-/// (16 = noticeably angular, 48+ = slow BSP on complex CSG)
-const BSP_SEGMENTS: u32 = 32;
+const DEFAULT_MIN_SEGMENTS: u32 = 32;
 
-/// Convert a ShapeNode tree to a TriMesh
-///
-/// Uses BREP for standalone primitives/transforms, BSP for CSG operations.
+/// Convert a ShapeNode tree to a TriMesh using default resolution
 pub fn realize(node: &ShapeNode) -> FernResult<TriMesh> {
+    realize_with_resolution(node, DEFAULT_MIN_SEGMENTS)
+}
+
+/// Convert a ShapeNode tree to a TriMesh with specified minimum segment count
+///
+/// `min_segments` sets the minimum for curved primitives (higher = smoother, slower).
+/// Uses BREP for standalone primitives/transforms, BSP for CSG operations.
+pub fn realize_with_resolution(node: &ShapeNode, min_segments: u32) -> FernResult<TriMesh> {
     match node {
         // CSG operations: go directly to BSP (BREP booleans are unreliable/slow)
         ShapeNode::Union { .. } | ShapeNode::Difference { .. } | ShapeNode::Intersection { .. } => {
-            realize_hybrid(node)
+            realize_hybrid(node, min_segments)
         }
 
         // Primitives and transforms: try BREP first for smooth tessellation
@@ -35,16 +40,16 @@ pub fn realize(node: &ShapeNode) -> FernResult<TriMesh> {
 
             match brep_result {
                 Ok(Ok(mesh)) if mesh.triangle_count() > 0 => Ok(mesh),
-                _ => realize_hybrid(node),
+                _ => realize_hybrid(node, min_segments),
             }
         }
     }
 }
 
 /// BSP-based realization with enhanced segment count for curved primitives
-fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
+fn realize_hybrid(node: &ShapeNode, min_segments: u32) -> FernResult<TriMesh> {
     match node {
-        // === Primitives: use max(segments, BSP_SEGMENTS) for smooth curves ===
+        // === Primitives: use max(segments, min_segments) for smooth curves ===
         ShapeNode::Box {
             width,
             depth,
@@ -53,7 +58,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
 
         ShapeNode::Sphere { radius, segments } => Ok(primitives::generate_sphere(
             *radius,
-            (*segments).max(BSP_SEGMENTS),
+            (*segments).max(min_segments),
         )),
 
         ShapeNode::Cylinder {
@@ -63,7 +68,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
         } => Ok(primitives::generate_cylinder(
             *radius,
             *height,
-            (*segments).max(BSP_SEGMENTS),
+            (*segments).max(min_segments),
         )),
 
         ShapeNode::Cone {
@@ -75,7 +80,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             *radius_bottom,
             *radius_top,
             *height,
-            (*segments).max(BSP_SEGMENTS),
+            (*segments).max(min_segments),
         )),
 
         ShapeNode::Torus {
@@ -85,7 +90,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
         } => Ok(primitives::generate_torus(
             *radius_major,
             *radius_minor,
-            (*segments).max(BSP_SEGMENTS),
+            (*segments).max(min_segments),
         )),
 
         ShapeNode::Prism {
@@ -105,7 +110,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
         } => Ok(primitives::generate_revolve(
             profile,
             *angle_rad,
-            (*segments).max(BSP_SEGMENTS),
+            (*segments).max(min_segments),
         )),
 
         // === CSG: BSP on realized meshes ===
@@ -113,18 +118,18 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             if children.is_empty() {
                 return Ok(TriMesh::new());
             }
-            let mut result = realize_hybrid(&children[0])?;
+            let mut result = realize_hybrid(&children[0], min_segments)?;
             for child in &children[1..] {
-                let child_mesh = realize_hybrid(child)?;
+                let child_mesh = realize_hybrid(child, min_segments)?;
                 result = bsp::csg_union(&result, &child_mesh);
             }
             Ok(result)
         }
 
         ShapeNode::Difference { base, cutters } => {
-            let mut result = realize_hybrid(base)?;
+            let mut result = realize_hybrid(base, min_segments)?;
             for cutter in cutters {
-                let cutter_mesh = realize_hybrid(cutter)?;
+                let cutter_mesh = realize_hybrid(cutter, min_segments)?;
                 result = bsp::csg_difference(&result, &cutter_mesh);
             }
             Ok(result)
@@ -134,9 +139,9 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             if children.is_empty() {
                 return Ok(TriMesh::new());
             }
-            let mut result = realize_hybrid(&children[0])?;
+            let mut result = realize_hybrid(&children[0], min_segments)?;
             for child in &children[1..] {
-                let child_mesh = realize_hybrid(child)?;
+                let child_mesh = realize_hybrid(child, min_segments)?;
                 result = bsp::csg_intersection(&result, &child_mesh);
             }
             Ok(result)
@@ -144,7 +149,7 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
 
         // === Transforms ===
         ShapeNode::Translate { shape, offset } => {
-            let mut mesh = realize_hybrid(shape)?;
+            let mut mesh = realize_hybrid(shape, min_segments)?;
             transform::translate(&mut mesh, *offset);
             Ok(mesh)
         }
@@ -154,35 +159,55 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             axis,
             angle_rad,
         } => {
-            let mut mesh = realize_hybrid(shape)?;
+            let mut mesh = realize_hybrid(shape, min_segments)?;
             transform::rotate(&mut mesh, *axis, *angle_rad);
             Ok(mesh)
         }
 
         ShapeNode::Scale { shape, factors } => {
-            let mut mesh = realize_hybrid(shape)?;
+            let mut mesh = realize_hybrid(shape, min_segments)?;
             transform::scale(&mut mesh, *factors);
             Ok(mesh)
         }
 
+        ShapeNode::Sweep {
+            profile,
+            path,
+            segments,
+        } => Ok(primitives::generate_sweep(
+            profile,
+            path,
+            (*segments).max(min_segments),
+        )),
+
+        ShapeNode::Loft {
+            profiles,
+            positions,
+            segments,
+        } => Ok(primitives::generate_loft(
+            profiles,
+            positions,
+            (*segments).max(min_segments),
+        )),
+
         ShapeNode::Chamfer { shape, distance } => {
-            // Approximate chamfer: realize the shape as-is
-            // (true chamfer requires BREP edge detection, not available in truck 0.6)
             let _ = distance;
-            realize_hybrid(shape)
+            realize_hybrid(shape, min_segments)
         }
     }
 }
 
 /// Evaluate source code and convert to a mesh
 ///
+/// Reads `*resolution*` from the evaluator environment to control mesh quality.
 /// Returns the mesh if the last expression evaluates to a Shape.
 pub fn eval_and_realize(source: &str) -> FernResult<TriMesh> {
     let mut evaluator = ferncad_core::evaluator::Evaluator::new();
     let result = evaluator.eval_source(source)?;
+    let resolution = evaluator.resolution();
 
     match result {
-        ferncad_core::types::Value::Shape(node) => realize(&node),
+        ferncad_core::types::Value::Shape(node) => realize_with_resolution(&node, resolution),
         _ => Err(FernError::CadError {
             message: format!(
                 "cannot convert to mesh: the last expression did not return a shape (type: {})",
@@ -295,6 +320,44 @@ mod tests {
     fn test_eval_and_realize() {
         let mesh = eval_and_realize("(box :width 10 :depth 10 :height 10)").unwrap();
         assert!(mesh.triangle_count() >= 12);
+    }
+
+    #[test]
+    fn test_realize_sweep() {
+        let source = r#"
+            (sweep :profile (circle :radius 1 :segments 8)
+                   :path (helix :radius 5 :pitch 2 :turns 1)
+                   :segments 16)
+        "#;
+        let mesh = eval_and_realize(source).unwrap();
+        assert!(mesh.triangle_count() > 0);
+        assert!(mesh.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_realize_loft() {
+        let source = r#"
+            (loft :profiles (list (circle :radius 5 :segments 8)
+                                  (circle :radius 3 :segments 8))
+                  :at (list 0 10)
+                  :segments 8)
+        "#;
+        let mesh = eval_and_realize(source).unwrap();
+        assert!(mesh.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_realize_sweep_with_csg() {
+        let source = r#"
+            (let* ((thread-profile (polygon (list 1.2 0.0) (list 1.5 0.25) (list 1.2 0.5)))
+                   (thread (sweep :profile thread-profile
+                                  :path (helix :radius 0 :pitch 0.5 :turns 5)
+                                  :segments 32))
+                   (shaft (cylinder :radius 1.2 :height 2.5)))
+              (union shaft thread))
+        "#;
+        let mesh = eval_and_realize(source).unwrap();
+        assert!(mesh.triangle_count() > 0);
     }
 
     #[test]

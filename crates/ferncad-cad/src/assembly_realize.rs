@@ -25,12 +25,19 @@ pub struct PartMesh {
 /// Realizes each part instance's ShapeNode,
 /// applies the transform matrix, and attaches the part name and color.
 pub fn realize_assembly(assembly: &AssemblyDef) -> FernResult<Vec<PartMesh>> {
+    realize_assembly_with_resolution(assembly, 32)
+}
+
+/// Convert an assembly into per-part TriMesh instances with specified resolution
+pub fn realize_assembly_with_resolution(
+    assembly: &AssemblyDef,
+    min_segments: u32,
+) -> FernResult<Vec<PartMesh>> {
     let mut result = Vec::new();
 
     for part_instance in &assembly.parts {
-        // Realize ShapeNode if available
         let mesh = if let Some(shape) = &part_instance.shape {
-            realize::realize(shape)?
+            realize::realize_with_resolution(shape, min_segments)?
         } else {
             // No shape -> empty mesh
             TriMesh::new()
@@ -57,14 +64,19 @@ pub fn realize_assembly(assembly: &AssemblyDef) -> FernResult<Vec<PartMesh>> {
 }
 
 /// Evaluate source code and return meshes for an assembly or single shape
+///
+/// Reads `*resolution*` from the evaluator environment to control mesh quality.
 pub fn eval_and_realize_parts(source: &str) -> FernResult<Vec<PartMesh>> {
     let mut evaluator = ferncad_core::evaluator::Evaluator::new();
     let result = evaluator.eval_source(source)?;
+    let resolution = evaluator.resolution();
 
     match result {
-        ferncad_core::types::Value::Assembly(assembly) => realize_assembly(&assembly),
+        ferncad_core::types::Value::Assembly(assembly) => {
+            realize_assembly_with_resolution(&assembly, resolution)
+        }
         ferncad_core::types::Value::Shape(node) => {
-            let mesh = realize::realize(&node)?;
+            let mesh = realize::realize_with_resolution(&node, resolution)?;
             Ok(vec![PartMesh {
                 name: "shape".to_string(),
                 mesh,
