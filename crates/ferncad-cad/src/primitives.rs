@@ -288,6 +288,105 @@ pub fn generate_torus(radius_major: f64, radius_minor: f64, segments: u32) -> Tr
     }
 }
 
+/// Generate a mesh by extruding a 2D polygon (in XY plane) along Z axis
+///
+/// Uses ear-clipping triangulation for top/bottom caps and quad-strip for sides.
+pub fn generate_extrude(profile: &[[f64; 2]], height: f64) -> TriMesh {
+    let n = profile.len();
+    let hh = height / 2.0;
+    let mut vertices = Vec::new();
+    let mut triangles = Vec::new();
+
+    // Bottom cap vertices (z = -hh)
+    for p in profile {
+        vertices.push([p[0], p[1], -hh]);
+    }
+    // Top cap vertices (z = +hh)
+    for p in profile {
+        vertices.push([p[0], p[1], hh]);
+    }
+
+    // Bottom cap triangulation (fan from vertex 0, reversed winding)
+    for i in 1..n - 1 {
+        triangles.push([0, i + 1, i]);
+    }
+    // Top cap triangulation (fan from vertex n)
+    for i in 1..n - 1 {
+        triangles.push([n, n + i, n + i + 1]);
+    }
+
+    // Side faces (quad strip)
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let b0 = i;
+        let b1 = j;
+        let t0 = n + i;
+        let t1 = n + j;
+        triangles.push([b0, b1, t1]);
+        triangles.push([b0, t1, t0]);
+    }
+
+    TriMesh {
+        vertices,
+        triangles,
+    }
+}
+
+/// Generate a mesh by revolving a 2D profile (in XZ plane) around Z axis
+///
+/// Each profile point (x, z) is revolved to create a surface of revolution.
+pub fn generate_revolve(profile: &[[f64; 2]], angle_rad: f64, segments: u32) -> TriMesh {
+    let n = profile.len();
+    let seg = segments as usize;
+    let mut vertices = Vec::new();
+    let mut triangles = Vec::new();
+
+    // Generate vertices: for each angular step, rotate each profile point
+    for s in 0..=seg {
+        let theta = angle_rad * s as f64 / seg as f64;
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+        for p in profile {
+            let x = p[0] * cos_t;
+            let y = p[0] * sin_t;
+            let z = p[1];
+            vertices.push([x, y, z]);
+        }
+    }
+
+    // Generate triangles: connect adjacent rings
+    for s in 0..seg {
+        for i in 0..n - 1 {
+            let a = s * n + i;
+            let b = s * n + i + 1;
+            let c = (s + 1) * n + i;
+            let d = (s + 1) * n + i + 1;
+            triangles.push([a, b, d]);
+            triangles.push([a, d, c]);
+        }
+    }
+
+    // Cap the ends if it's a full revolution (close the shape)
+    let full_rev = (angle_rad - 2.0 * PI).abs() < 0.01;
+    if !full_rev {
+        // Add end caps for partial revolution (fan triangulation)
+        // Start cap (s=0)
+        for i in 1..n - 1 {
+            triangles.push([0, i + 1, i]);
+        }
+        // End cap (s=seg)
+        let base = seg * n;
+        for i in 1..n - 1 {
+            triangles.push([base, base + i, base + i + 1]);
+        }
+    }
+
+    TriMesh {
+        vertices,
+        triangles,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

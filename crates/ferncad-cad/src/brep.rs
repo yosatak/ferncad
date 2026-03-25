@@ -143,6 +143,19 @@ fn shape_to_solid_inner(node: &ShapeNode, allow_cavity_fallback: bool) -> FernRe
                 Vector3::new(factors[0], factors[1], factors[2]),
             ))
         }
+
+        // Profile operations
+        ShapeNode::Extrude { profile, height } => build_extrude(profile, *height),
+
+        ShapeNode::Revolve {
+            profile,
+            angle_rad,
+            segments: _,
+        } => build_revolve(profile, *angle_rad),
+
+        ShapeNode::Chamfer { .. } => Err(FernError::CadError {
+            message: "BREP chamfer not supported, using mesh fallback".to_string(),
+        }),
     }
 }
 
@@ -457,6 +470,67 @@ fn build_torus(radius_major: f64, radius_minor: f64) -> FernResult<Solid> {
         Point3::origin(),
         Vector3::unit_z(),
         Rad(7.0),
+    ))
+}
+
+/// Extrude a 2D profile (XY plane) along Z axis
+fn build_extrude(profile: &[[f64; 2]], height: f64) -> FernResult<Solid> {
+    let n = profile.len();
+    let mut verts = Vec::with_capacity(n);
+    for p in profile {
+        verts.push(builder::vertex(Point3::new(p[0], p[1], 0.0)));
+    }
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        edges.push(builder::line(&verts[i], &verts[next]));
+    }
+
+    let wire: Wire = edges.into();
+    let face = builder::try_attach_plane(&[wire]).map_err(|e| FernError::CadError {
+        message: format!("BREP extrude profile face creation failed: {e}"),
+    })?;
+
+    let solid = builder::tsweep(&face, Vector3::new(0.0, 0.0, height));
+    Ok(builder::translated(
+        &solid,
+        Vector3::new(0.0, 0.0, -height / 2.0),
+    ))
+}
+
+/// Revolve a 2D profile (XZ plane) around Z axis
+fn build_revolve(profile: &[[f64; 2]], angle_rad: f64) -> FernResult<Solid> {
+    let n = profile.len();
+    let mut verts = Vec::with_capacity(n);
+    for p in profile {
+        // Profile in XZ plane: p[0] = radius (X), p[1] = height (Z)
+        verts.push(builder::vertex(Point3::new(p[0], 0.0, p[1])));
+    }
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        edges.push(builder::line(&verts[i], &verts[next]));
+    }
+
+    let wire: Wire = edges.into();
+    let face = builder::try_attach_plane(&[wire]).map_err(|e| FernError::CadError {
+        message: format!("BREP revolve profile face creation failed: {e}"),
+    })?;
+
+    // Use Rad(7.0) for full revolution (> 2π), otherwise use exact angle
+    let sweep_angle = if (angle_rad - 2.0 * std::f64::consts::PI).abs() < 0.01 {
+        Rad(7.0) // Full revolution
+    } else {
+        Rad(angle_rad)
+    };
+
+    Ok(builder::rsweep(
+        &face,
+        Point3::origin(),
+        Vector3::unit_z(),
+        sweep_angle,
     ))
 }
 

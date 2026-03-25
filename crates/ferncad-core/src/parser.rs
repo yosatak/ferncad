@@ -91,11 +91,44 @@ impl<'a> Parser<'a> {
             Token::Keyword(k) => Ok(Value::Keyword(k)),
             Token::Minus => Ok(Value::Symbol("-".to_string())),
             Token::Slash => Ok(Value::Symbol("/".to_string())),
+            Token::Ampersand => {
+                // &rest, &key etc. — combine & with next symbol
+                if let Some(st) = self.peek() {
+                    if let Token::Symbol(s) = &st.token {
+                        let combined = format!("&{s}");
+                        self.advance();
+                        return Ok(Value::Symbol(combined));
+                    }
+                }
+                Ok(Value::Symbol("&".to_string()))
+            }
             Token::TypeAnnotation => Ok(Value::Symbol("::".to_string())),
             Token::UnitPrefix => self.parse_special_literal("u"),
             Token::AnglePrefix => self.parse_special_literal("a"),
             Token::Vec3Prefix => self.parse_special_literal("v"),
             Token::Point3Prefix => self.parse_special_literal("p"),
+            // Quasiquote reader macros
+            Token::Backquote => {
+                let expr = self.parse_expr()?;
+                Ok(Value::List(vec![
+                    Value::Symbol("quasiquote".to_string()),
+                    expr,
+                ]))
+            }
+            Token::CommaAt => {
+                let expr = self.parse_expr()?;
+                Ok(Value::List(vec![
+                    Value::Symbol("unquote-splicing".to_string()),
+                    expr,
+                ]))
+            }
+            Token::Comma => {
+                let expr = self.parse_expr()?;
+                Ok(Value::List(vec![
+                    Value::Symbol("unquote".to_string()),
+                    expr,
+                ]))
+            }
         }
     }
 

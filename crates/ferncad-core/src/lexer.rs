@@ -67,6 +67,19 @@ pub enum Token {
     #[regex(r"[a-zA-Z_+*!?<>=][a-zA-Z0-9_+*\-/!?.<>=]*", |lex| lex.slice().to_string())]
     Symbol(String),
 
+    // === Quasiquote syntax ===
+    /// Backquote `` ` `` (quasiquote prefix)
+    #[token("`")]
+    Backquote,
+
+    /// Comma-at `,@` (unquote-splicing prefix, higher priority than Comma)
+    #[token(",@", priority = 2)]
+    CommaAt,
+
+    /// Comma `,` (unquote prefix)
+    #[token(",", priority = 1)]
+    Comma,
+
     // === Arithmetic operators (as standalone symbols) ===
     /// Standalone `-` (minus operator)
     #[token("-", priority = 1)]
@@ -75,6 +88,10 @@ pub enum Token {
     /// Standalone `/` (division operator)
     #[token("/", priority = 1)]
     Slash,
+
+    /// Ampersand `&` (used in `&rest`, `&key` parameter syntax)
+    #[token("&", priority = 1)]
+    Ampersand,
 }
 
 /// Parse a string literal (strip surrounding double quotes)

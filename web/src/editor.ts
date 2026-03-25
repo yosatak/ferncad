@@ -36,13 +36,13 @@ const fernLanguage = StreamLanguage.define({
     // Definition keywords
     if (stream.match(/defpart|defun|defmacro|defvar|defmeta/)) return 'definitionKeyword';
     // Control flow
-    if (stream.match(/let\*|if|cond|quote|lambda|progn/)) return 'keyword';
+    if (stream.match(/let\*|if|cond|quote|quasiquote|lambda|progn/)) return 'keyword';
     // CSG operators
     if (stream.match(/union|difference|intersection/)) return 'operatorKeyword';
     // Primitives
     if (stream.match(/box|sphere|cylinder|cone|torus|prism|cube/)) return 'typeName';
     // Transforms
-    if (stream.match(/translate|rotate|scale|mirror/)) return 'function';
+    if (stream.match(/translate|rotate|scale|mirror|extrude|revolve|chamfer/)) return 'function';
     // General symbols
     if (stream.match(/[a-zA-Z_+*!?<>=][a-zA-Z0-9_+*\-/!?.<>=]*/)) return 'variableName';
     // Skip unknown characters
@@ -110,11 +110,12 @@ const DEFAULT_CODE = `;; ferncad — Lisp CAD Modeler
 export function createEditor(
   container: HTMLElement,
   onChange: (code: string) => void,
+  initialCode?: string,
 ): EditorView {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const state = EditorState.create({
-    doc: DEFAULT_CODE,
+    doc: initialCode ?? DEFAULT_CODE,
     extensions: [
       basicSetup,
       fernLanguage,

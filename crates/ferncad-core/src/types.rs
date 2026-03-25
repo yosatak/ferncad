@@ -49,6 +49,8 @@ pub enum Value {
     AxisRef(crate::face::AxisRef),
     /// Assembly definition
     Assembly(Arc<crate::assembly::AssemblyDef>),
+    /// Macro definition
+    Macro(Arc<MacroDef>),
 }
 
 impl Value {
@@ -111,6 +113,7 @@ impl Value {
             Value::FaceRef(_) => "face-ref",
             Value::AxisRef(_) => "axis-ref",
             Value::Assembly(_) => "assembly",
+            Value::Macro(_) => "macro",
         }
     }
 }
@@ -147,6 +150,7 @@ impl fmt::Display for Value {
             Value::FaceRef(r) => write!(f, "<face:{}:{}>", r.instance_name, r.face_name),
             Value::AxisRef(r) => write!(f, "<axis:{}:{}>", r.instance_name, r.axis_name),
             Value::Assembly(a) => write!(f, "<assembly:{}>", a.name),
+            Value::Macro(m) => write!(f, "<macro:{}>", m.name),
         }
     }
 }
@@ -199,6 +203,19 @@ pub struct LambdaDef {
     /// Function body (list of S-expressions)
     pub body: Vec<Value>,
     /// Environment ID at definition time (for closures)
+    pub env_id: usize,
+}
+
+/// Macro definition
+#[derive(Debug, Clone)]
+pub struct MacroDef {
+    /// Macro name
+    pub name: String,
+    /// Parameter name list
+    pub params: Vec<String>,
+    /// Macro body (quasiquote template or expressions)
+    pub body: Vec<Value>,
+    /// Environment ID at definition time
     pub env_id: usize,
 }
 
@@ -301,5 +318,21 @@ pub enum ShapeNode {
     Scale {
         shape: Arc<ShapeNode>,
         factors: [f64; 3],
+    },
+
+    // === Profile operations ===
+    /// Extrude a 2D profile along Z axis
+    Extrude { profile: Vec<[f64; 2]>, height: f64 },
+    /// Revolve a 2D profile (in XZ plane) around Z axis
+    Revolve {
+        profile: Vec<[f64; 2]>,
+        angle_rad: f64,
+        segments: u32,
+    },
+
+    /// Chamfer all edges of a shape
+    Chamfer {
+        shape: Arc<ShapeNode>,
+        distance: f64,
     },
 }

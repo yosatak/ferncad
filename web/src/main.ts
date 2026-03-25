@@ -8,6 +8,7 @@
 import { createEditor, getCode } from './editor';
 import { Viewer } from './viewer';
 import { initWasm, evaluateParts, exportStl, exportStep, type PartsResult } from './wasm-bridge';
+import { saveCurrentCode, loadCurrentCode, saveModel, loadModel, listModels, deleteModel } from './storage';
 
 /** Update the status bar */
 function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
@@ -88,8 +89,13 @@ async function main(): Promise<void> {
     );
   }
 
+  // Load saved code or use default
+  const savedCode = loadCurrentCode();
   const editorContainer = document.getElementById('editor-container')!;
-  const editor = createEditor(editorContainer, runEvaluation);
+  const editor = createEditor(editorContainer, (code) => {
+    saveCurrentCode(code);
+    runEvaluation(code);
+  }, savedCode ?? undefined);
   runEvaluation(getCode(editor));
 
   document.getElementById('btn-evaluate')!.addEventListener('click', () => {
@@ -122,6 +128,34 @@ async function main(): Promise<void> {
     downloadBlob(result as BlobPart, 'ferncad-export.step', 'application/step');
     setStatus('STEP downloaded', 'success');
   });
+
+  // Save model
+  document.getElementById('btn-save')!.addEventListener('click', () => {
+    const name = prompt('Model name:');
+    if (!name) return;
+    saveModel(name, getCode(editor));
+    setStatus(`Saved: ${name}`, 'success');
+  });
+
+  // Load model
+  document.getElementById('btn-load')!.addEventListener('click', () => {
+    const models = listModels();
+    if (models.length === 0) {
+      setStatus('No saved models', 'info');
+      return;
+    }
+    showLoadDialog(models, (name) => {
+      const code = loadModel(name);
+      if (code) {
+        editor.dispatch({
+          changes: { from: 0, to: editor.state.doc.length, insert: code },
+        });
+        saveCurrentCode(code);
+        runEvaluation(code);
+        setStatus(`Loaded: ${name}`, 'success');
+      }
+    });
+  });
 }
 
 function downloadBlob(data: BlobPart, filename: string, mimeType: string): void {
@@ -132,6 +166,63 @@ function downloadBlob(data: BlobPart, filename: string, mimeType: string): void 
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Show a simple load dialog */
+function showLoadDialog(
+  models: { name: string; timestamp: number }[],
+  onSelect: (name: string) => void,
+): void {
+  // Remove existing dialog
+  document.getElementById('load-dialog')?.remove();
+
+  const dialog = document.createElement('div');
+  dialog.id = 'load-dialog';
+  dialog.innerHTML = `
+    <div class="dialog-overlay"></div>
+    <div class="dialog-content">
+      <h3>Load Model</h3>
+      <div class="dialog-list">
+        ${models.map((m) => {
+          const date = new Date(m.timestamp).toLocaleString();
+          return `<div class="dialog-item" data-name="${m.name}">
+            <span class="dialog-name">${m.name}</span>
+            <span class="dialog-date">${date}</span>
+            <button class="dialog-delete" data-name="${m.name}" title="Delete">x</button>
+          </div>`;
+        }).join('')}
+      </div>
+      <button class="dialog-close">Cancel</button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+
+  // Item click -> load
+  dialog.querySelectorAll('.dialog-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains('dialog-delete')) return;
+      const name = (el as HTMLElement).dataset.name!;
+      dialog.remove();
+      onSelect(name);
+    });
+  });
+
+  // Delete button
+  dialog.querySelectorAll('.dialog-delete').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = (el as HTMLElement).dataset.name!;
+      if (confirm(`Delete "${name}"?`)) {
+        deleteModel(name);
+        dialog.remove();
+      }
+    });
+  });
+
+  // Close button / overlay click
+  dialog.querySelector('.dialog-close')!.addEventListener('click', () => dialog.remove());
+  dialog.querySelector('.dialog-overlay')!.addEventListener('click', () => dialog.remove());
 }
 
 main();

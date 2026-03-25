@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::env::Env;
 use crate::error::{FernError, FernResult, SourceLocation};
 use crate::types::{
-    BuiltinFnDef, LambdaDef, ParamSpec, PartDef, ShapeNode, Value, DEFAULT_SEGMENTS,
+    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, ShapeNode, Value, DEFAULT_SEGMENTS,
 };
 
 /// Evaluator
@@ -100,13 +100,15 @@ impl Evaluator {
                 "if" => return self.eval_if(items, env),
                 "lambda" => return self.eval_lambda(items, env),
                 "quote" => return self.eval_quote(items),
+                "quasiquote" => return self.eval_quasiquote(items, env),
+                "defmacro" => return self.eval_defmacro(items, env),
                 "progn" | "begin" => return self.eval_progn(items, env),
                 "cond" => return self.eval_cond(items, env),
                 _ => {}
             }
         }
 
-        // Function call
+        // Function call (evaluate head to get callable)
         let func = self.eval(&items[0], env)?;
         let args = &items[1..];
 
@@ -118,6 +120,7 @@ impl Evaluator {
             }
             Value::Lambda(lambda_def) => self.apply_lambda(&lambda_def, args, env),
             Value::PartDef(part_def) => self.apply_part(&part_def, args, env),
+            Value::Macro(macro_def) => self.apply_macro(&macro_def, args, env),
             _ => Err(FernError::EvalError {
                 loc,
                 message: format!(
@@ -320,6 +323,189 @@ impl Evaluator {
             });
         }
         Ok(items[1].clone())
+    }
+
+    /// Evaluate `(defmacro name (params...) body...)`
+    fn eval_defmacro(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 4 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`defmacro` requires (defmacro name (params...) body...) form".to_string(),
+            });
+        }
+
+        let name = match &items[1] {
+            Value::Symbol(s) => s.clone(),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`defmacro` first argument must be a symbol".to_string(),
+                });
+            }
+        };
+
+        // Skip optional docstring
+        let (params_idx, body_start) = if items.len() > 4 {
+            if let Value::Str(_) = &items[3] {
+                (2, 4)
+            } else {
+                (2, 3)
+            }
+        } else {
+            (2, 3)
+        };
+
+        let params = self.extract_param_names(&items[params_idx])?;
+        let params = filter_type_annotations(&params);
+        let body = items[body_start..].to_vec();
+        let env_id = env.borrow().id;
+        self.register_env(Rc::clone(env));
+
+        let macro_val = Value::Macro(Arc::new(MacroDef {
+            name: name.clone(),
+            params,
+            body,
+            env_id,
+        }));
+        env.borrow_mut().define(name, macro_val.clone());
+        Ok(macro_val)
+    }
+
+    /// Evaluate `(quasiquote template)` — recursive template expansion
+    fn eval_quasiquote(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 2 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`quasiquote` requires exactly one argument".to_string(),
+            });
+        }
+        self.expand_quasiquote(&items[1], env)
+    }
+
+    /// Recursively expand a quasiquote template
+    fn expand_quasiquote(&mut self, template: &Value, env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        match template {
+            Value::List(items) if !items.is_empty() => {
+                // Check for (unquote expr)
+                if let Value::Symbol(s) = &items[0] {
+                    if s == "unquote" {
+                        if items.len() != 2 {
+                            return Err(FernError::EvalError {
+                                loc: SourceLocation { line: 0, col: 0 },
+                                message: "`unquote` requires exactly one argument".to_string(),
+                            });
+                        }
+                        return self.eval(&items[1], env);
+                    }
+                    // unquote-splicing at top level is an error
+                    if s == "unquote-splicing" {
+                        return Err(FernError::EvalError {
+                            loc: SourceLocation { line: 0, col: 0 },
+                            message: "`unquote-splicing` (,@) not valid outside a list context"
+                                .to_string(),
+                        });
+                    }
+                }
+
+                // Process list elements, handling splicing
+                let mut result = Vec::new();
+                for item in items {
+                    if let Value::List(inner) = item {
+                        if !inner.is_empty() {
+                            if let Value::Symbol(s) = &inner[0] {
+                                if s == "unquote-splicing" {
+                                    if inner.len() != 2 {
+                                        return Err(FernError::EvalError {
+                                            loc: SourceLocation { line: 0, col: 0 },
+                                            message:
+                                                "`unquote-splicing` requires exactly one argument"
+                                                    .to_string(),
+                                        });
+                                    }
+                                    let val = self.eval(&inner[1], env)?;
+                                    if let Value::List(splice_items) = val {
+                                        result.extend(splice_items);
+                                    } else {
+                                        return Err(FernError::EvalError {
+                                            loc: SourceLocation { line: 0, col: 0 },
+                                            message: format!(
+                                                "`unquote-splicing` requires a list, got {}",
+                                                val.type_name()
+                                            ),
+                                        });
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    result.push(self.expand_quasiquote(item, env)?);
+                }
+                Ok(Value::List(result))
+            }
+            // Non-list values: return as-is (like quote)
+            _ => Ok(template.clone()),
+        }
+    }
+
+    /// Apply a macro: bind unevaluated args, evaluate body, then eval the expansion
+    fn apply_macro(
+        &mut self,
+        macro_def: &MacroDef,
+        args: &[Value],
+        env: &Rc<RefCell<Env>>,
+    ) -> FernResult<Value> {
+        // Create macro expansion environment
+        let parent_env = self
+            .env_map
+            .get(&macro_def.env_id)
+            .cloned()
+            .unwrap_or_else(|| Rc::clone(&self.env));
+        let macro_env = Env::new_child(parent_env);
+        self.register_env(Rc::clone(&macro_env));
+
+        // Bind unevaluated arguments to macro parameters
+        // Support &rest for variadic macros
+        let mut rest_idx = None;
+        for (i, param) in macro_def.params.iter().enumerate() {
+            if param == "&rest" {
+                rest_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(ri) = rest_idx {
+            // Bind positional params before &rest
+            for (i, param) in macro_def.params[..ri].iter().enumerate() {
+                let val = args.get(i).cloned().unwrap_or(Value::Nil);
+                macro_env.borrow_mut().define(param.clone(), val);
+            }
+            // Bind &rest param to remaining args as a list
+            if ri + 1 < macro_def.params.len() {
+                let rest_name = &macro_def.params[ri + 1];
+                let rest_vals = args[ri..].to_vec();
+                macro_env
+                    .borrow_mut()
+                    .define(rest_name.clone(), Value::List(rest_vals));
+            }
+        } else {
+            // Simple positional binding
+            for (i, param) in macro_def.params.iter().enumerate() {
+                let val = args.get(i).cloned().unwrap_or(Value::Nil);
+                macro_env.borrow_mut().define(param.clone(), val);
+            }
+        }
+
+        // Evaluate macro body to produce expansion
+        let mut expansion = Value::Nil;
+        for expr in &macro_def.body {
+            expansion = self.eval(expr, &macro_env)?;
+        }
+
+        // Evaluate the expansion in the caller's environment
+        self.eval(&expansion, env)
     }
 
     /// Evaluate `(progn body...)`
@@ -1006,6 +1192,7 @@ impl Evaluator {
 
         // Debug
         self.register_builtin("print", builtin_print);
+        self.register_builtin("macroexpand-1", builtin_macroexpand_1);
 
         // CAD primitives
         self.register_builtin("box", builtin_box);
@@ -1042,6 +1229,16 @@ impl Evaluator {
         self.register_builtin("align-axis", builtin_align_axis);
         self.register_builtin("fit", builtin_fit);
         self.register_builtin("joint", builtin_joint);
+
+        // Profile operations
+        self.register_builtin("polygon", builtin_polygon);
+        self.register_builtin("extrude", builtin_extrude);
+        self.register_builtin("revolve", builtin_revolve);
+
+        // Edge operations
+        self.register_builtin("chamfer", builtin_chamfer);
+        self.register_builtin("fillet", builtin_fillet);
+        self.register_builtin("shell", builtin_shell);
     }
 
     /// Register a built-in function
@@ -1373,6 +1570,21 @@ fn builtin_print(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
     }
     println!();
     Ok(args.last().cloned().unwrap_or(Value::Nil))
+}
+
+/// `macroexpand-1` — expand a macro call once without evaluating the result
+fn builtin_macroexpand_1(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    // This is a placeholder; actual expansion requires evaluator context.
+    // The real work is done by the evaluator when it encounters a macro call.
+    if args.is_empty() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`macroexpand-1` requires a quoted form argument".to_string(),
+        });
+    }
+    // Return the form as-is since we can't expand without evaluator context
+    // (actual expansion happens when the form is evaluated)
+    Ok(args[0].clone())
 }
 
 // === CAD built-in functions ===
@@ -1858,6 +2070,185 @@ fn builtin_joint(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
         joint_type,
         parts,
     ]))
+}
+
+// === Profile operations ===
+
+/// `(polygon (list x1 y1) (list x2 y2) ...)` — create a 2D polygon from point pairs
+fn builtin_polygon(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.is_empty() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`polygon` requires at least 3 points: (polygon (list x y) ...)".to_string(),
+        });
+    }
+
+    let mut points = Vec::new();
+    for arg in args {
+        match arg {
+            Value::List(coords) if coords.len() == 2 => {
+                let x = coords[0].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "polygon point x must be a number".to_string(),
+                })?;
+                let y = coords[1].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "polygon point y must be a number".to_string(),
+                })?;
+                points.push(Value::List(vec![Value::Float(x), Value::Float(y)]));
+            }
+            Value::Point3(p) => {
+                // Allow 3D points, use X and Y
+                points.push(Value::List(vec![Value::Float(p[0]), Value::Float(p[1])]));
+            }
+            _ => {
+                return Err(FernError::EvalError {
+                    loc: loc.clone(),
+                    message: format!(
+                        "polygon expects 2D point pairs (list x y), got: {}",
+                        arg.type_name()
+                    ),
+                });
+            }
+        }
+    }
+
+    if points.len() < 3 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "polygon requires at least 3 points".to_string(),
+        });
+    }
+
+    Ok(Value::List(points))
+}
+
+/// `(extrude :profile polygon :height h)` — extrude a 2D polygon along Z
+fn builtin_extrude(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let profile = require_kwarg(&kwargs, "profile", "extrude", loc)?;
+    let height = require_kwarg_f64(&kwargs, "height", "extrude", loc)?;
+
+    let points = extract_polygon_points(profile, loc)?;
+
+    Ok(Value::Shape(Arc::new(ShapeNode::Extrude {
+        profile: points,
+        height,
+    })))
+}
+
+/// `(revolve :profile polygon :angle angle)` — revolve a 2D polygon around Z
+fn builtin_revolve(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let profile = require_kwarg(&kwargs, "profile", "revolve", loc)?;
+    let angle = get_kwarg_f64(&kwargs, "angle", loc)?.unwrap_or(2.0 * std::f64::consts::PI);
+    let segments = get_kwarg_f64(&kwargs, "segments", loc)?
+        .map(|s| s as u32)
+        .unwrap_or(DEFAULT_SEGMENTS);
+
+    let points = extract_polygon_points(profile, loc)?;
+
+    Ok(Value::Shape(Arc::new(ShapeNode::Revolve {
+        profile: points,
+        angle_rad: angle,
+        segments,
+    })))
+}
+
+/// Extract 2D points from a polygon Value::List
+fn extract_polygon_points(val: &Value, loc: &SourceLocation) -> FernResult<Vec<[f64; 2]>> {
+    let items = match val {
+        Value::List(items) => items,
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: "profile must be a polygon (list of 2D points)".to_string(),
+            });
+        }
+    };
+
+    let mut points = Vec::new();
+    for item in items {
+        match item {
+            Value::List(coords) if coords.len() == 2 => {
+                let x = coords[0].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "polygon point x must be a number".to_string(),
+                })?;
+                let y = coords[1].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "polygon point y must be a number".to_string(),
+                })?;
+                points.push([x, y]);
+            }
+            _ => {
+                return Err(FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "polygon point must be a 2-element list (list x y)".to_string(),
+                });
+            }
+        }
+    }
+
+    if points.len() < 3 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "profile requires at least 3 points".to_string(),
+        });
+    }
+
+    Ok(points)
+}
+
+/// Get a required keyword argument (any type)
+fn require_kwarg<'a>(
+    kwargs: &'a HashMap<String, Value>,
+    key: &str,
+    func_name: &str,
+    loc: &SourceLocation,
+) -> FernResult<&'a Value> {
+    kwargs.get(key).ok_or_else(|| FernError::EvalError {
+        loc: loc.clone(),
+        message: format!("`{func_name}` requires `:{key}` argument"),
+    })
+}
+
+// === Edge operations ===
+
+/// `(chamfer :shape s :distance d)` — apply chamfer to all edges
+fn builtin_chamfer(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let shape = kwargs
+        .get("shape")
+        .ok_or_else(|| FernError::EvalError {
+            loc: loc.clone(),
+            message: "`chamfer` requires keyword argument `:shape`".to_string(),
+        })
+        .and_then(|v| get_shape_arg(v, loc))?;
+    let distance = require_kwarg_f64(&kwargs, "distance", "chamfer", loc)?;
+
+    Ok(Value::Shape(Arc::new(ShapeNode::Chamfer {
+        shape,
+        distance,
+    })))
+}
+
+/// `(fillet ...)` — not yet supported
+fn builtin_fillet(_args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    Err(FernError::EvalError {
+        loc: loc.clone(),
+        message: "fillet is not yet supported (truck 0.6 limitation). \
+                  Consider using chamfer as an alternative."
+            .to_string(),
+    })
+}
+
+/// `(shell ...)` — not yet supported
+fn builtin_shell(_args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    Err(FernError::EvalError {
+        loc: loc.clone(),
+        message: "shell (hollowing) is not yet supported (truck 0.6 limitation)".to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -2368,6 +2759,125 @@ mod tests {
                 assert!(message.contains("not found"));
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    // === Macro tests ===
+
+    #[test]
+    fn test_quasiquote_basic() {
+        // `(a b c) should return (a b c) like quote
+        assert_eq!(
+            eval("`(a b c)"),
+            Value::List(vec![
+                Value::Symbol("a".to_string()),
+                Value::Symbol("b".to_string()),
+                Value::Symbol("c".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_quasiquote_unquote() {
+        // `(a ,(+ 1 2) c) should return (a 3.0 c)
+        let result = eval("`(a ,(+ 1 2) c)");
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::Symbol("a".to_string()));
+                assert_eq!(items[1], Value::Float(3.0));
+                assert_eq!(items[2], Value::Symbol("c".to_string()));
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_quasiquote_splice() {
+        // `(a ,@(list 1 2 3) b) should return (a 1 2 3 b)
+        let result = eval("`(a ,@(list 1 2 3) b)");
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 5);
+                assert_eq!(items[0], Value::Symbol("a".to_string()));
+                assert_eq!(items[1], Value::Int(1));
+                assert_eq!(items[2], Value::Int(2));
+                assert_eq!(items[3], Value::Int(3));
+                assert_eq!(items[4], Value::Symbol("b".to_string()));
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_defmacro_simple() {
+        // Define a macro that wraps its argument in a list call
+        let result = eval(
+            r#"
+            (defmacro wrap (x)
+              `(list ,x))
+            (wrap 42)
+        "#,
+        );
+        assert_eq!(result, Value::List(vec![Value::Int(42)]));
+    }
+
+    #[test]
+    fn test_defmacro_with_splice() {
+        // Define a macro that creates a sum
+        let result = eval(
+            r#"
+            (defmacro add-all (&rest args)
+              `(+ ,@args))
+            (add-all 1 2 3 4)
+        "#,
+        );
+        assert_eq!(result, Value::Float(10.0));
+    }
+
+    #[test]
+    fn test_defmacro_when() {
+        // Classic "when" macro: (when condition body...) → (if condition (progn body...))
+        let result = eval(
+            r#"
+            (defmacro when (condition &rest body)
+              `(if ,condition (progn ,@body)))
+            (when t (+ 1 2))
+        "#,
+        );
+        assert_eq!(result, Value::Float(3.0));
+    }
+
+    #[test]
+    fn test_quasiquote_nested_unquote() {
+        let result = eval(
+            r#"
+            (defvar x 10)
+            (defvar y 20)
+            `(+ ,x ,y)
+        "#,
+        );
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::Symbol("+".to_string()));
+                assert_eq!(items[1], Value::Int(10));
+                assert_eq!(items[2], Value::Int(20));
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_backquote_with_variable() {
+        let result = eval("(defvar b 42) `(a ,b)");
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], Value::Symbol("a".to_string()));
+                assert_eq!(items[1], Value::Int(42));
+            }
+            other => panic!("expected List, got {other:?}"),
         }
     }
 }

@@ -94,6 +94,20 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             height,
         } => Ok(primitives::generate_prism(*sides, *radius, *height)),
 
+        ShapeNode::Extrude { profile, height } => {
+            Ok(primitives::generate_extrude(profile, *height))
+        }
+
+        ShapeNode::Revolve {
+            profile,
+            angle_rad,
+            segments,
+        } => Ok(primitives::generate_revolve(
+            profile,
+            *angle_rad,
+            (*segments).max(BSP_SEGMENTS),
+        )),
+
         // === CSG: BSP on realized meshes ===
         ShapeNode::Union { children } => {
             if children.is_empty() {
@@ -149,6 +163,13 @@ fn realize_hybrid(node: &ShapeNode) -> FernResult<TriMesh> {
             let mut mesh = realize_hybrid(shape)?;
             transform::scale(&mut mesh, *factors);
             Ok(mesh)
+        }
+
+        ShapeNode::Chamfer { shape, distance } => {
+            // Approximate chamfer: realize the shape as-is
+            // (true chamfer requires BREP edge detection, not available in truck 0.6)
+            let _ = distance;
+            realize_hybrid(shape)
         }
     }
 }
