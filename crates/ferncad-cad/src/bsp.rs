@@ -2,6 +2,7 @@
 //!
 //! A Rust implementation of the csg.js (Evan Wallace) algorithm.
 //! Performs union, difference, and intersection on triangle meshes.
+//! Uses iterative traversal to avoid stack overflow on large meshes.
 
 use crate::mesh::{cross, dot, lerp, normalize, scale_vec, sub, TriMesh};
 
@@ -30,8 +31,8 @@ struct BspNode {
     polygons: Vec<Polygon>,
 }
 
-/// Classification of a vertex relative to a plane
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
 enum Classification {
     Coplanar = 0,
     Front = 1,
@@ -40,20 +41,18 @@ enum Classification {
 }
 
 impl Plane {
-    /// Create a plane from 3 vertices
     fn from_points(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<Self> {
-        let n = normalize(cross(sub(b, a), sub(c, a)));
-        let len_sq = dot(n, n);
-        if len_sq < 0.5 {
-            return None; // degenerate triangle
+        let normal = normalize(cross(sub(b, a), sub(c, a)));
+        let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        if len < EPSILON {
+            return None;
         }
-        Some(Self {
-            normal: n,
-            w: dot(n, a),
+        Some(Plane {
+            w: dot(normal, a),
+            normal,
         })
     }
 
-    /// Flip the plane
     fn flip(&mut self) {
         self.normal = scale_vec(self.normal, -1.0);
         self.w = -self.w;
@@ -61,24 +60,21 @@ impl Plane {
 }
 
 impl Polygon {
-    /// Flip the polygon (reverse vertex order)
-    fn flip(&mut self) {
-        self.vertices.reverse();
-    }
-
-    /// Get the plane of the polygon
     fn plane(&self) -> Option<Plane> {
         if self.vertices.len() < 3 {
             return None;
         }
         Plane::from_points(self.vertices[0], self.vertices[1], self.vertices[2])
     }
+
+    fn flip(&mut self) {
+        self.vertices.reverse();
+    }
 }
 
 impl BspNode {
-    /// Create an empty node
     fn new() -> Self {
-        Self {
+        BspNode {
             plane: None,
             front: None,
             back: None,
@@ -86,7 +82,6 @@ impl BspNode {
         }
     }
 
-    /// Build a BSP tree from a list of polygons
     fn build(polygons: Vec<Polygon>) -> Option<Self> {
         if polygons.is_empty() {
             return None;
@@ -96,144 +91,168 @@ impl BspNode {
         Some(node)
     }
 
-    /// Add polygons to the tree
+    /// Add polygons to the tree (iterative to avoid stack overflow)
     fn add_polygons(&mut self, polygons: Vec<Polygon>) {
-        if polygons.is_empty() {
-            return;
-        }
+        // Work queue: (node pointer, polygons to add)
+        let mut queue: Vec<(*mut BspNode, Vec<Polygon>)> = vec![(self as *mut _, polygons)];
 
-        if self.plane.is_none() {
-            // Use the first polygon's plane as the splitting plane
-            self.plane = polygons[0].plane();
-            if self.plane.is_none() {
-                // Skip degenerate polygon and try the next one
-                for p in &polygons {
+        while let Some((node_ptr, polys)) = queue.pop() {
+            if polys.is_empty() {
+                continue;
+            }
+
+            // SAFETY: we hold exclusive access to the tree during build
+            let node = unsafe { &mut *node_ptr };
+
+            if node.plane.is_none() {
+                // Find first non-degenerate polygon for the splitting plane
+                for p in &polys {
                     if let Some(plane) = p.plane() {
-                        self.plane = Some(plane);
+                        node.plane = Some(plane);
                         break;
                     }
                 }
-                if self.plane.is_none() {
-                    return;
+                if node.plane.is_none() {
+                    continue;
                 }
             }
-        }
 
-        let plane = self.plane.as_ref().unwrap().clone();
-        let mut coplanar_front = Vec::new();
-        let mut coplanar_back = Vec::new();
-        let mut front_polys = Vec::new();
-        let mut back_polys = Vec::new();
+            let plane = node.plane.as_ref().unwrap().clone();
+            let mut front_polys = Vec::new();
+            let mut back_polys = Vec::new();
 
-        for polygon in polygons {
-            split_polygon(
-                &plane,
-                polygon,
-                &mut coplanar_front,
-                &mut coplanar_back,
-                &mut front_polys,
-                &mut back_polys,
-            );
-        }
-
-        // Store coplanar polygons in this node
-        self.polygons.extend(coplanar_front);
-        self.polygons.extend(coplanar_back);
-
-        if !front_polys.is_empty() {
-            if self.front.is_none() {
-                self.front = Some(Box::new(BspNode::new()));
+            for polygon in polys {
+                let mut coplanar_front = Vec::new();
+                let mut coplanar_back = Vec::new();
+                split_polygon(
+                    &plane,
+                    polygon,
+                    &mut coplanar_front,
+                    &mut coplanar_back,
+                    &mut front_polys,
+                    &mut back_polys,
+                );
+                node.polygons.extend(coplanar_front);
+                node.polygons.extend(coplanar_back);
             }
-            self.front.as_mut().unwrap().add_polygons(front_polys);
-        }
 
-        if !back_polys.is_empty() {
-            if self.back.is_none() {
-                self.back = Some(Box::new(BspNode::new()));
+            if !front_polys.is_empty() {
+                if node.front.is_none() {
+                    node.front = Some(Box::new(BspNode::new()));
+                }
+                queue.push((node.front.as_mut().unwrap().as_mut() as *mut _, front_polys));
             }
-            self.back.as_mut().unwrap().add_polygons(back_polys);
+
+            if !back_polys.is_empty() {
+                if node.back.is_none() {
+                    node.back = Some(Box::new(BspNode::new()));
+                }
+                queue.push((node.back.as_mut().unwrap().as_mut() as *mut _, back_polys));
+            }
         }
     }
 
-    /// Collect all polygons
+    /// Collect all polygons (iterative)
     fn all_polygons(&self) -> Vec<Polygon> {
-        let mut result = self.polygons.clone();
-        if let Some(front) = &self.front {
-            result.extend(front.all_polygons());
-        }
-        if let Some(back) = &self.back {
-            result.extend(back.all_polygons());
+        let mut result = Vec::new();
+        let mut stack: Vec<&BspNode> = vec![self];
+        while let Some(node) = stack.pop() {
+            result.extend(node.polygons.iter().cloned());
+            if let Some(front) = &node.front {
+                stack.push(front);
+            }
+            if let Some(back) = &node.back {
+                stack.push(back);
+            }
         }
         result
     }
 
-    /// Invert the tree
+    /// Invert the tree (iterative)
     fn invert(&mut self) {
-        for poly in &mut self.polygons {
-            poly.flip();
+        let mut stack: Vec<*mut BspNode> = vec![self as *mut _];
+        while let Some(node_ptr) = stack.pop() {
+            // SAFETY: we hold exclusive access to the tree
+            let node = unsafe { &mut *node_ptr };
+            for poly in &mut node.polygons {
+                poly.flip();
+            }
+            if let Some(plane) = &mut node.plane {
+                plane.flip();
+            }
+            std::mem::swap(&mut node.front, &mut node.back);
+            if let Some(front) = &mut node.front {
+                stack.push(front.as_mut() as *mut _);
+            }
+            if let Some(back) = &mut node.back {
+                stack.push(back.as_mut() as *mut _);
+            }
         }
-        if let Some(plane) = &mut self.plane {
-            plane.flip();
-        }
-        if let Some(front) = &mut self.front {
-            front.invert();
-        }
-        if let Some(back) = &mut self.back {
-            back.invert();
-        }
-        std::mem::swap(&mut self.front, &mut self.back);
     }
 
-    /// Remove polygons that are inside this tree
+    /// Remove polygons that are inside this tree (iterative)
     fn clip_polygons(&self, polygons: &[Polygon]) -> Vec<Polygon> {
-        if self.plane.is_none() {
-            return polygons.to_vec();
+        // Process pairs of (tree node, polygons to clip) iteratively
+        let mut result = Vec::new();
+        let mut work: Vec<(&BspNode, Vec<Polygon>)> = vec![(self, polygons.to_vec())];
+
+        while let Some((node, polys)) = work.pop() {
+            if node.plane.is_none() {
+                result.extend(polys);
+                continue;
+            }
+
+            let plane = node.plane.as_ref().unwrap();
+            let mut front = Vec::new();
+            let mut back = Vec::new();
+
+            for polygon in polys {
+                let mut coplanar_front = Vec::new();
+                let mut coplanar_back = Vec::new();
+                split_polygon(
+                    plane,
+                    polygon,
+                    &mut coplanar_front,
+                    &mut coplanar_back,
+                    &mut front,
+                    &mut back,
+                );
+                front.extend(coplanar_front);
+                back.extend(coplanar_back);
+            }
+
+            if !front.is_empty() {
+                if let Some(f) = &node.front {
+                    work.push((f, front));
+                } else {
+                    result.extend(front);
+                }
+            }
+
+            if !back.is_empty() {
+                if let Some(b) = &node.back {
+                    work.push((b, back));
+                }
+                // no back tree -> discard back polygons
+            }
         }
 
-        let plane = self.plane.as_ref().unwrap();
-        let mut front = Vec::new();
-        let mut back = Vec::new();
-
-        for polygon in polygons {
-            let mut coplanar_front = Vec::new();
-            let mut coplanar_back = Vec::new();
-            split_polygon(
-                plane,
-                polygon.clone(),
-                &mut coplanar_front,
-                &mut coplanar_back,
-                &mut front,
-                &mut back,
-            );
-            front.extend(coplanar_front);
-            back.extend(coplanar_back);
-        }
-
-        let front = if let Some(f) = &self.front {
-            f.clip_polygons(&front)
-        } else {
-            front
-        };
-
-        let back = if let Some(b) = &self.back {
-            b.clip_polygons(&back)
-        } else {
-            Vec::new() // no back tree -> discard back polygons
-        };
-
-        let mut result = front;
-        result.extend(back);
         result
     }
 
-    /// Clip this tree against another tree
+    /// Clip this tree against another tree (iterative)
     fn clip_to(&mut self, other: &BspNode) {
-        self.polygons = other.clip_polygons(&self.polygons);
-        if let Some(front) = &mut self.front {
-            front.clip_to(other);
-        }
-        if let Some(back) = &mut self.back {
-            back.clip_to(other);
+        let mut stack: Vec<*mut BspNode> = vec![self as *mut _];
+        while let Some(node_ptr) = stack.pop() {
+            // SAFETY: we hold exclusive access to the tree
+            let node = unsafe { &mut *node_ptr };
+            node.polygons = other.clip_polygons(&node.polygons);
+            if let Some(front) = &mut node.front {
+                stack.push(front.as_mut() as *mut _);
+            }
+            if let Some(back) = &mut node.back {
+                stack.push(back.as_mut() as *mut _);
+            }
         }
     }
 }
@@ -253,28 +272,29 @@ fn split_polygon(
     for vertex in &polygon.vertices {
         let t = dot(plane.normal, *vertex) - plane.w;
         let vtype = if t < -EPSILON {
-            Classification::Back
+            Classification::Back as u8
         } else if t > EPSILON {
-            Classification::Front
+            Classification::Front as u8
         } else {
-            Classification::Coplanar
+            Classification::Coplanar as u8
         };
-        polygon_type |= vtype as u8;
+        polygon_type |= vtype;
         types.push(vtype);
     }
 
-    match polygon_type.try_into() {
-        Ok(Classification::Coplanar) => {
+    match polygon_type {
+        0 => {
+            // Coplanar
             if dot(plane.normal, polygon.plane().map_or([0.0; 3], |p| p.normal)) > 0.0 {
                 coplanar_front.push(polygon);
             } else {
                 coplanar_back.push(polygon);
             }
         }
-        Ok(Classification::Front) => front.push(polygon),
-        Ok(Classification::Back) => back.push(polygon),
+        1 => front.push(polygon), // Front
+        2 => back.push(polygon),  // Back
         _ => {
-            // Spanning: split the polygon
+            // Spanning
             let mut f_verts = Vec::new();
             let mut b_verts = Vec::new();
             let n = polygon.vertices.len();
@@ -286,15 +306,14 @@ fn split_polygon(
                 let vi = polygon.vertices[i];
                 let vj = polygon.vertices[j];
 
-                if ti != Classification::Back {
+                if ti != Classification::Back as u8 {
                     f_verts.push(vi);
                 }
-                if ti != Classification::Front {
+                if ti != Classification::Front as u8 {
                     b_verts.push(vi);
                 }
 
-                if (ti as u8 | tj as u8) == Classification::Spanning as u8 {
-                    // Compute intersection point
+                if (ti | tj) == Classification::Spanning as u8 {
                     let t = (plane.w - dot(plane.normal, vi)) / dot(plane.normal, sub(vj, vi));
                     let v = lerp(vi, vj, t);
                     f_verts.push(v);
@@ -303,45 +322,14 @@ fn split_polygon(
             }
 
             if f_verts.len() >= 3 {
-                // Triangulate using fan
-                for polys in triangulate(&f_verts) {
-                    front.push(polys);
-                }
+                front.push(Polygon { vertices: f_verts });
             }
             if b_verts.len() >= 3 {
-                for polys in triangulate(&b_verts) {
-                    back.push(polys);
-                }
+                back.push(Polygon { vertices: b_verts });
             }
         }
     }
 }
-
-impl TryFrom<u8> for Classification {
-    type Error = ();
-    fn try_from(v: u8) -> Result<Self, Self::Error> {
-        match v {
-            0 => Ok(Classification::Coplanar),
-            1 => Ok(Classification::Front),
-            2 => Ok(Classification::Back),
-            3 => Ok(Classification::Spanning),
-            _ => Err(()),
-        }
-    }
-}
-
-/// Triangulate a polygon using a triangle fan
-fn triangulate(vertices: &[[f64; 3]]) -> Vec<Polygon> {
-    let mut result = Vec::new();
-    for i in 1..vertices.len() - 1 {
-        result.push(Polygon {
-            vertices: vec![vertices[0], vertices[i], vertices[i + 1]],
-        });
-    }
-    result
-}
-
-// === TriMesh <-> Polygon conversion ===
 
 /// Convert a TriMesh to a list of polygons
 fn mesh_to_polygons(mesh: &TriMesh) -> Vec<Polygon> {
@@ -472,19 +460,13 @@ mod tests {
             v[0] += 20.0;
         }
         let result = csg_union(&a, &b);
-        assert!(result.triangle_count() > 0);
-        // Non-overlapping, so triangle count is a + b
-        assert_eq!(
-            result.triangle_count(),
-            a.triangle_count() + b.triangle_count()
-        );
+        assert_eq!(result.triangle_count(), 24);
     }
 
     #[test]
     fn test_union_overlapping() {
         let a = generate_box(10.0, 10.0, 10.0);
         let mut b = generate_box(10.0, 10.0, 10.0);
-        // Move b slightly to the right (overlapping)
         for v in &mut b.vertices {
             v[0] += 5.0;
         }
@@ -494,18 +476,19 @@ mod tests {
 
     #[test]
     fn test_difference() {
-        let a = generate_box(20.0, 20.0, 20.0);
-        let b = generate_box(10.0, 10.0, 10.0);
+        let a = generate_box(10.0, 10.0, 10.0);
+        let b = generate_box(5.0, 5.0, 5.0);
         let result = csg_difference(&a, &b);
-        assert!(result.triangle_count() > 0);
-        // Difference should produce more triangles than the original
-        assert!(result.triangle_count() > a.triangle_count());
+        assert!(result.triangle_count() > 12);
     }
 
     #[test]
     fn test_intersection() {
-        let a = generate_box(20.0, 20.0, 20.0);
-        let b = generate_box(10.0, 10.0, 10.0);
+        let a = generate_box(10.0, 10.0, 10.0);
+        let mut b = generate_box(10.0, 10.0, 10.0);
+        for v in &mut b.vertices {
+            v[0] += 5.0;
+        }
         let result = csg_intersection(&a, &b);
         assert!(result.triangle_count() > 0);
     }

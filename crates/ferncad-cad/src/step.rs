@@ -15,7 +15,7 @@ use crate::brep;
 ///
 /// Returns an error if BREP conversion or STEP serialization fails.
 pub fn export_step_bytes(node: &ShapeNode) -> FernResult<Vec<u8>> {
-    let solid = brep::shape_to_solid(node)?;
+    let solid = brep::shape_to_solid_for_export(node)?;
     let compressed = solid.compress();
     let step_model = StepModel::from(&compressed);
     let header = StepHeaderDescriptor {

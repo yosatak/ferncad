@@ -8,6 +8,7 @@ import init, {
   evaluate as wasmEvaluate,
   evaluate_parts as wasmEvaluateParts,
   export_stl as wasmExportStl,
+  export_step as wasmExportStep,
   check_syntax as wasmCheckSyntax,
 } from '../pkg/ferncad_wasm.js';
 
@@ -72,6 +73,15 @@ export function evaluateParts(source: string): PartsResult | { error: string } {
 export function exportStl(source: string): Uint8Array | { error: string } {
   try {
     return wasmExportStl(source);
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/** Export source code as STEP (exact BREP geometry) */
+export function exportStep(source: string): Uint8Array | { error: string } {
+  try {
+    return wasmExportStep(source);
   } catch (e) {
     return { error: String(e) };
   }

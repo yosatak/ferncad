@@ -14,15 +14,29 @@ use crate::mesh::TriMesh;
 /// Tolerance for CSG boolean operations
 const CSG_TOLERANCE: f64 = 0.01;
 
-/// Tessellation tolerance (lower = finer mesh)
+/// Tessellation tolerance for STEP/standalone display (lower = finer mesh)
 const TESSELLATION_TOLERANCE: f64 = 0.05;
 
-/// Convert a `ShapeNode` tree to a truck `Solid`
+/// Tessellation tolerance for BSP hybrid path (coarser for performance)
+const TESSELLATION_TOLERANCE_FOR_BSP: f64 = 0.2;
+
+/// Convert a `ShapeNode` tree to a truck `Solid` for rendering.
 ///
-/// # Errors
-///
-/// Returns an error for unsupported shapes or truck internal failures.
+/// Does NOT use cavity fallback for difference — returns Err so that
+/// `realize()` can fall back to the BSP mesh pipeline.
 pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
+    shape_to_solid_inner(node, false)
+}
+
+/// Convert a `ShapeNode` tree to a truck `Solid` for STEP export.
+///
+/// Uses cavity fallback for difference when boolean operations fail,
+/// producing a valid BREP that CAD software interprets correctly.
+pub fn shape_to_solid_for_export(node: &ShapeNode) -> FernResult<Solid> {
+    shape_to_solid_inner(node, true)
+}
+
+fn shape_to_solid_inner(node: &ShapeNode, allow_cavity_fallback: bool) -> FernResult<Solid> {
     match node {
         ShapeNode::Box {
             width,
@@ -67,31 +81,19 @@ pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
                     message: "union requires at least one child".to_string(),
                 });
             }
-            let mut result = shape_to_solid(&children[0])?;
+            let mut result = shape_to_solid_inner(&children[0], allow_cavity_fallback)?;
             for child in &children[1..] {
-                let child_solid = shape_to_solid(child)?;
-                result =
-                    truck_shapeops::or(&result, &child_solid, CSG_TOLERANCE).ok_or_else(|| {
-                        FernError::CadError {
-                            message: "BREP union operation failed".to_string(),
-                        }
-                    })?;
+                let child_solid = shape_to_solid_inner(child, allow_cavity_fallback)?;
+                result = try_boolean_or(&result, &child_solid)?;
             }
             Ok(result)
         }
 
         ShapeNode::Difference { base, cutters } => {
-            let mut result = shape_to_solid(base)?;
+            let mut result = shape_to_solid_inner(base, allow_cavity_fallback)?;
             for cutter in cutters {
-                let mut cutter_solid = shape_to_solid(cutter)?;
-                // Difference A - B = A ∩ complement(B)
-                // Solid::not() inverts all face orientations, creating the complement
-                cutter_solid.not();
-                result = truck_shapeops::and(&result, &cutter_solid, CSG_TOLERANCE).ok_or_else(
-                    || FernError::CadError {
-                        message: "BREP difference operation failed".to_string(),
-                    },
-                )?;
+                let cutter_solid = shape_to_solid_inner(cutter, allow_cavity_fallback)?;
+                result = try_boolean_difference(&result, &cutter_solid, allow_cavity_fallback)?;
             }
             Ok(result)
         }
@@ -102,22 +104,17 @@ pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
                     message: "intersection requires at least one child".to_string(),
                 });
             }
-            let mut result = shape_to_solid(&children[0])?;
+            let mut result = shape_to_solid_inner(&children[0], allow_cavity_fallback)?;
             for child in &children[1..] {
-                let child_solid = shape_to_solid(child)?;
-                result =
-                    truck_shapeops::and(&result, &child_solid, CSG_TOLERANCE).ok_or_else(|| {
-                        FernError::CadError {
-                            message: "BREP intersection operation failed".to_string(),
-                        }
-                    })?;
+                let child_solid = shape_to_solid_inner(child, allow_cavity_fallback)?;
+                result = try_boolean_and(&result, &child_solid)?;
             }
             Ok(result)
         }
 
         // Transforms
         ShapeNode::Translate { shape, offset } => {
-            let solid = shape_to_solid(shape)?;
+            let solid = shape_to_solid_inner(shape, allow_cavity_fallback)?;
             Ok(builder::translated(
                 &solid,
                 Vector3::new(offset[0], offset[1], offset[2]),
@@ -129,7 +126,7 @@ pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
             axis,
             angle_rad,
         } => {
-            let solid = shape_to_solid(shape)?;
+            let solid = shape_to_solid_inner(shape, allow_cavity_fallback)?;
             Ok(builder::rotated(
                 &solid,
                 Point3::origin(),
@@ -139,7 +136,7 @@ pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
         }
 
         ShapeNode::Scale { shape, factors } => {
-            let solid = shape_to_solid(shape)?;
+            let solid = shape_to_solid_inner(shape, allow_cavity_fallback)?;
             Ok(builder::scaled(
                 &solid,
                 Point3::origin(),
@@ -149,25 +146,138 @@ pub fn shape_to_solid(node: &ShapeNode) -> FernResult<Solid> {
     }
 }
 
-/// Tessellate a truck `Solid` into a `TriMesh`
+/// Tessellate a truck `Solid` into a `TriMesh` (fine tolerance for display/export)
 pub fn solid_to_trimesh(solid: &Solid) -> FernResult<TriMesh> {
-    let tessellated = solid.triangulation(TESSELLATION_TOLERANCE);
-    let polygon = tessellated.to_polygon();
+    solid_to_trimesh_with_tolerance(solid, TESSELLATION_TOLERANCE)
+}
 
-    let positions = polygon.positions();
-    let tri_faces = polygon.tri_faces();
+/// Tessellate a truck `Solid` into a `TriMesh` (coarser for BSP hybrid pipeline)
+pub fn solid_to_trimesh_for_bsp(solid: &Solid) -> FernResult<TriMesh> {
+    solid_to_trimesh_with_tolerance(solid, TESSELLATION_TOLERANCE_FOR_BSP)
+}
 
-    let vertices: Vec<[f64; 3]> = positions.iter().map(|p| [p.x, p.y, p.z]).collect();
+fn solid_to_trimesh_with_tolerance(solid: &Solid, tolerance: f64) -> FernResult<TriMesh> {
+    let mut all_vertices: Vec<[f64; 3]> = Vec::new();
+    let mut all_triangles: Vec<[usize; 3]> = Vec::new();
 
-    let triangles: Vec<[usize; 3]> = tri_faces
-        .iter()
-        .map(|f| [f[0].pos, f[1].pos, f[2].pos])
-        .collect();
+    // Tessellate each shell/face individually for robustness
+    for shell in solid.boundaries() {
+        let tessellated = shell.triangulation(tolerance);
+        let polygon = tessellated.to_polygon();
+        let positions = polygon.positions();
+        let tri_faces = polygon.tri_faces();
+
+        let base = all_vertices.len();
+        all_vertices.extend(positions.iter().map(|p| [p.x, p.y, p.z]));
+        all_triangles.extend(
+            tri_faces
+                .iter()
+                .map(|f| [f[0].pos + base, f[1].pos + base, f[2].pos + base]),
+        );
+    }
 
     Ok(TriMesh {
-        vertices,
-        triangles,
+        vertices: all_vertices,
+        triangles: all_triangles,
     })
+}
+
+// === Robust boolean operations ===
+
+/// Tolerances to try when a boolean operation fails at the default tolerance
+const RETRY_TOLERANCES: [f64; 1] = [0.05];
+
+/// Try boolean union with multiple tolerances
+fn try_boolean_or(a: &Solid, b: &Solid) -> FernResult<Solid> {
+    // Try default tolerance first
+    if let Some(result) = catch_boolean(|| truck_shapeops::or(a, b, CSG_TOLERANCE)) {
+        if !result.boundaries().is_empty() {
+            return Ok(result);
+        }
+    }
+    // Retry with different tolerances
+    for &tol in &RETRY_TOLERANCES {
+        if let Some(result) = catch_boolean(|| truck_shapeops::or(a, b, tol)) {
+            if !result.boundaries().is_empty() {
+                return Ok(result);
+            }
+        }
+    }
+    // Fallback: merge boundaries from both solids (geometrically approximate)
+    let mut boundaries = a.boundaries().clone();
+    boundaries.extend(b.boundaries().iter().cloned());
+    Ok(Solid::new(boundaries))
+}
+
+/// Try boolean intersection with multiple tolerances
+fn try_boolean_and(a: &Solid, b: &Solid) -> FernResult<Solid> {
+    if let Some(result) = catch_boolean(|| truck_shapeops::and(a, b, CSG_TOLERANCE)) {
+        if !result.boundaries().is_empty() {
+            return Ok(result);
+        }
+    }
+    for &tol in &RETRY_TOLERANCES {
+        if let Some(result) = catch_boolean(|| truck_shapeops::and(a, b, tol)) {
+            if !result.boundaries().is_empty() {
+                return Ok(result);
+            }
+        }
+    }
+    Err(FernError::CadError {
+        message: "BREP intersection operation failed at all tolerances".to_string(),
+    })
+}
+
+/// Try boolean difference (A - B) with multiple strategies
+///
+/// Strategy 1: A ∩ complement(B) via not() + and()
+/// Strategy 2 (export only): Cavity representation (B's inverted shells as inner boundaries of A)
+fn try_boolean_difference(a: &Solid, b: &Solid, allow_cavity_fallback: bool) -> FernResult<Solid> {
+    // Strategy 1: not() + and() with multiple tolerances
+    let mut b_complement = b.clone();
+    b_complement.not();
+
+    if let Some(result) = catch_boolean(|| truck_shapeops::and(a, &b_complement, CSG_TOLERANCE)) {
+        if !result.boundaries().is_empty() {
+            return Ok(result);
+        }
+    }
+    for &tol in &RETRY_TOLERANCES {
+        if let Some(result) = catch_boolean(|| truck_shapeops::and(a, &b_complement, tol)) {
+            if !result.boundaries().is_empty() {
+                return Ok(result);
+            }
+        }
+    }
+
+    if !allow_cavity_fallback {
+        return Err(FernError::CadError {
+            message: "BREP difference operation failed at all tolerances".to_string(),
+        });
+    }
+
+    // Strategy 2 (STEP export only): Cavity representation
+    // Represent A - B as A with B's shells added as internal cavities (inverted normals).
+    // Valid BREP that CAD software interprets correctly, but not suitable for direct rendering.
+    let mut boundaries = a.boundaries().clone();
+    for shell in b.boundaries() {
+        let mut cavity = shell.clone();
+        for face in cavity.face_iter_mut() {
+            face.invert();
+        }
+        boundaries.push(cavity);
+    }
+    Ok(Solid::new(boundaries))
+}
+
+/// Run a boolean operation, catching panics and returning None on failure
+fn catch_boolean<F>(f: F) -> Option<Solid>
+where
+    F: FnOnce() -> Option<Solid>,
+{
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .ok()
+        .flatten()
 }
 
 // === Primitive builders ===

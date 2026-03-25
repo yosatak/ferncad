@@ -7,7 +7,7 @@
 
 import { createEditor, getCode } from './editor';
 import { Viewer } from './viewer';
-import { initWasm, evaluateParts, exportStl, type PartsResult } from './wasm-bridge';
+import { initWasm, evaluateParts, exportStl, exportStep, type PartsResult } from './wasm-bridge';
 
 /** Update the status bar */
 function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
@@ -111,6 +111,16 @@ async function main(): Promise<void> {
     }
     downloadBlob(result as BlobPart, 'ferncad-export.stl', 'application/octet-stream');
     setStatus('STL downloaded', 'success');
+  });
+
+  document.getElementById('btn-export-step')!.addEventListener('click', () => {
+    const result = exportStep(getCode(editor));
+    if ('error' in result) {
+      setStatus(`STEP error: ${result.error}`, 'error');
+      return;
+    }
+    downloadBlob(result as BlobPart, 'ferncad-export.step', 'application/step');
+    setStatus('STEP downloaded', 'success');
   });
 }
 
