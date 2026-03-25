@@ -14,6 +14,7 @@
 | `keyword` | Keyword | `:radius` |
 | `bool` | Boolean | `t`, `nil` |
 | `shape` | CSG shape | `(box ...)` |
+| `path` | Parametric 3D curve | `(helix ...)` |
 | `list` | List | `(list 1 2 3)` |
 
 ## Special Forms
@@ -61,8 +62,24 @@
 | Function | Arguments | Description |
 |----------|-----------|-------------|
 | `polygon` | `(list x y) ...` | Create 2D point list |
+| `circle` | `:radius :segments` | Circle polygon approximation |
 | `extrude` | `:profile :height` | Extrude 2D profile along Z |
-| `revolve` | `:profile :angle` | Revolve 2D profile around Z |
+| `revolve` | `:profile :angle :segments` | Revolve 2D profile around Z |
+
+## Path Constructors
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `helix` | `:radius :pitch :turns` | Helical path (spiral) |
+| `arc` | `:radius :angle` | Circular arc in XY plane |
+| `bezier` | `:points` | Bezier curve through control points |
+
+## Sweep / Loft Operations
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `sweep` | `:profile :path :segments` | Sweep 2D profile along a 3D path |
+| `loft` | `:profiles :at :segments` | Interpolate between multiple 2D profiles |
 
 ## CSG Operations
 
@@ -116,4 +133,26 @@
 #a(1 :turn)   ; 2π rad
 #v(1 0 0)     ; 3D vector
 #p(10 20 30)  ; 3D point
+```
+
+## Global Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `pi` | 3.14159... | Mathematical constant |
+| `*resolution*` | `16` | Default segment count for curved surfaces |
+
+Set `*resolution*` to control mesh quality:
+
+```lisp
+(defvar *resolution* 64)  ; smoother meshes (higher = finer, slower)
+```
+
+## CLI
+
+```bash
+ferncad <input.fern>                         # Evaluate and print
+ferncad <input.fern> --stl <out.stl>         # Export STL (assembly → per-part files)
+ferncad <input.fern> --step <out.step>       # Export STEP
+ferncad <input.fern> --segments 64 --stl ... # Override mesh resolution
 ```

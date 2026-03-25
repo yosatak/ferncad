@@ -133,6 +133,96 @@ Create shapes from 2D profiles:
   :angle #a(360 :deg))
 ```
 
+## Paths and Sweep
+
+Sweep a 2D profile along a 3D path to create complex shapes like threads, pipes, and springs:
+
+```lisp
+;; Circle profile helper
+(circle :radius 2 :segments 16)
+
+;; Sweep a circle along a helix → spring/coil
+(sweep :profile (circle :radius 0.5 :segments 12)
+       :path    (helix :radius 5 :pitch 3 :turns 4)
+       :segments 128)
+
+;; Sweep along a circular arc → pipe bend
+(sweep :profile (circle :radius 1 :segments 12)
+       :path    (arc :radius 10 :angle (/ pi 2))
+       :segments 32)
+
+;; Sweep along a Bezier curve
+(sweep :profile (polygon (list -1 0) (list 0 1) (list 1 0))
+       :path    (bezier :points (list (list 0 0 0)
+                                      (list 10 10 0)
+                                      (list 20 0 10)))
+       :segments 48)
+```
+
+### Screw Thread Example
+
+```lisp
+(defvar +pitch+ 0.5)
+(defvar +major-r+ 1.5)
+(defvar +minor-r+ 1.221)
+
+(let* ((length 10)
+       (turns (/ length +pitch+))
+       (tooth-h (- +major-r+ +minor-r+))
+       (thread-profile (polygon
+         (list 0.0 (- 0 (/ +pitch+ 4)))
+         (list tooth-h 0.0)
+         (list 0.0 (/ +pitch+ 4))))
+       (thread (sweep :profile thread-profile
+                      :path (helix :radius +minor-r+
+                                   :pitch +pitch+
+                                   :turns turns)
+                      :segments (* turns 24)))
+       (shaft (cylinder :radius +minor-r+ :height length))
+       (shaft-up (translate :shape shaft
+                            :by (list 0 0 (/ length 2)))))
+  (union shaft-up thread))
+```
+
+## Loft
+
+Interpolate between multiple 2D profiles at different Z positions:
+
+```lisp
+;; Transition from circle to square
+(loft :profiles (list (circle :radius 5 :segments 32)
+                      (polygon (list -3 -3) (list 3 -3)
+                               (list 3 3) (list -3 3)))
+      :at (list 0 20)
+      :segments 16)
+
+;; Bottle shape: three circular cross-sections
+(loft :profiles (list (circle :radius 4 :segments 24)
+                      (circle :radius 5 :segments 24)
+                      (circle :radius 2 :segments 24))
+      :at (list 0 10 30)
+      :segments 16)
+```
+
+## Mesh Resolution
+
+Control the fineness of curved surfaces:
+
+```lisp
+;; Set at the top of your .fern file
+(defvar *resolution* 64)  ; default is 16
+```
+
+Or from the CLI:
+```bash
+ferncad model.fern --segments 64 --stl output.stl
+```
+
+Higher values produce smoother meshes but take longer to compute. Recommended:
+- `16` — fast preview
+- `32` — standard quality
+- `64+` — 3D printing
+
 ## Macros
 
 Define code transformations with `defmacro` and quasiquote:
@@ -184,4 +274,11 @@ Use the toolbar buttons or CLI:
 ```bash
 ferncad input.fern --stl output.stl
 ferncad input.fern --step output.step
+ferncad input.fern --segments 64 --stl output.stl  # high quality
+```
+
+Assembly files automatically export per-part STL files:
+```bash
+ferncad assembly.fern --stl output.stl
+# → output-bolt.stl, output-nut.stl, ...
 ```
