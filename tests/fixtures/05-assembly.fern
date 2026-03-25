@@ -1,0 +1,5 @@
+;; アセンブリテスト
+(assembly "bracket-assembly"
+  (place :part (box :width 40 :depth 5 :height 30) :as :plate)
+  (place :part (cylinder :radius 2 :height 10) :as :pin :at #p(0 0 15))
+  (mate (face :pin :bottom) (face :plate :top)))

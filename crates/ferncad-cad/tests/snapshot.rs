@@ -98,3 +98,37 @@ fn test_mvp_completion_criteria() {
     assert_eq!(positions.len(), normals.len());
     assert_eq!(positions.len() % 9, 0, "三角形 × 3頂点 × 3座標");
 }
+
+#[test]
+fn test_05_assembly() {
+    let source = include_str!("../../../tests/fixtures/05-assembly.fern");
+    let parts = ferncad_cad::assembly_realize::eval_and_realize_parts(source).unwrap();
+    assert_eq!(parts.len(), 2, "アセンブリに2パーツあるべき");
+    assert_eq!(parts[0].name, "plate");
+    assert_eq!(parts[1].name, "pin");
+    assert!(parts[0].mesh.triangle_count() > 0);
+    assert!(parts[1].mesh.triangle_count() > 0);
+}
+
+#[test]
+fn test_06_standard_lib() {
+    let source = include_str!("../../../tests/fixtures/06-standard-lib.fern");
+    let mesh = eval_and_realize(source).unwrap();
+    assert!(
+        mesh.triangle_count() > 0,
+        "標準ライブラリ m3-bolt でメッシュが生成されるべき"
+    );
+}
+
+#[test]
+fn test_step_export_box() {
+    let node = ferncad_core::types::ShapeNode::Box {
+        width: 10.0,
+        depth: 10.0,
+        height: 10.0,
+    };
+    let bytes = ferncad_cad::step::export_step_bytes(&node).unwrap();
+    let content = String::from_utf8_lossy(&bytes);
+    assert!(content.contains("ISO-10303-21"));
+    assert!(content.contains("MANIFOLD_SOLID_BREP"));
+}

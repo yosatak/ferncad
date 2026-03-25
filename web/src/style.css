@@ -105,10 +105,49 @@ html, body {
 #viewer-panel {
   width: 50%;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+#assembly-tree {
+  max-height: 120px;
+  overflow-y: auto;
+  background: #252526;
+  border-bottom: 1px solid #3e3e3e;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+#assembly-tree:empty {
+  display: none;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.tree-color {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tree-name {
+  color: #d4d4d4;
+}
+
+.tree-info {
+  color: #666;
+  margin-left: auto;
 }
 
 #viewer-canvas {
   width: 100%;
-  height: 100%;
+  flex: 1;
   display: block;
 }

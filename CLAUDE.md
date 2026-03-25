@@ -39,9 +39,10 @@ cd web && npm install && npm run build
 ## クレート構成
 
 - `crates/ferncad-core` — Lexer (logos) / Parser (再帰下降) / Evaluator (ツリーウォーク) / 型定義 (Value, ShapeNode)（WASM非依存）
-- `crates/ferncad-cad` — CAD カーネル: プリミティブ生成、BSP CSG (union/difference/intersection)、変換、STL エクスポート、ShapeNode→TriMesh 変換
-- `crates/ferncad-wasm` — WASM バインディング（薄いラッパー: evaluate, export_stl, check_syntax）
+- `crates/ferncad-cad` — CAD カーネル: プリミティブ生成、BSP CSG、truck BREP パイプライン、変換、STL/STEP エクスポート、アセンブリメッシュ化
+- `crates/ferncad-wasm` — WASM バインディング（evaluate, evaluate_parts, export_stl, export_step, check_syntax）
 - `crates/ferncad-cli` — CLI ツール
+- `std/` — 標準ライブラリ（.fern ファイル、ビルド時に include_str! で埋め込み）
 
 ## 実装状態
 
@@ -54,17 +55,31 @@ cd web && npm install && npm run build
 - STL エクスポート
 - WASM バインディング + Web フロントエンド (CodeMirror 6 + Three.js)
 
-### Phase 1 既知の制限
-- BSP CSG はセグメント数が多いと遅い（デフォルト 16 に制限）
-- defpart の :faces / :axes は未実装
-- defmacro / quasiquote は未実装
-- :: 型アノテーションはパースのみ（型チェックなし）
+### Phase 2 (完了)
+- truck BREP パイプライン (Box/Cylinder/Cone/Prism の BREP 変換、テッセレーション)
+- :: 型アノテーションの実行時チェック (defpart パラメータバインド時)
+- defmeta スペシャルフォーム
+- defpart :faces / :axes 宣言 + face/axis 組み込み関数 (FaceRef/AxisRef)
+- assembly ブロック + place + パーツインスタンス管理
+- 制約: mate, align-axis, fit, joint（直接変換方式）
+- STEP エクスポート (truck-stepio 経由、BREP 対応形状のみ)
+- require/import モジュールシステム（標準ライブラリ埋め込み）
+- export 宣言
+- std/fasteners/m3-bolt.fern 標準ライブラリ
+- Web UI: アセンブリツリー表示、パーツ色分け、STEP ダウンロードボタン
+
+### Phase 2 既知の制限
+- 球/トーラスの BREP 変換は未対応（STL では動作）
+- BREP difference は未対応（BSP CSG でカバー）
+- 制約は直接変換方式（制約ソルバーではない）
+- defmacro / quasiquote は未実装（Phase 3）
+- require はビルトインモジュールのみ（ファイル読み込みは CLI のみ予定）
 
 ## 依存クレートバージョン
 
 - logos 0.16, thiserror 2, ordered-float 5
+- truck-modeling 0.6, truck-shapeops 0.4, truck-meshalgo 0.4, truck-stepio 0.3
 - wasm-bindgen 0.2, js-sys 0.3
-- truck は Phase 1 未使用（Phase 2 以降で検討）
 
 ## 判断に迷ったとき
 

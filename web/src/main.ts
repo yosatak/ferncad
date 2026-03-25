@@ -2,11 +2,12 @@
  * ferncad Web アプリケーション エントリポイント
  *
  * エディタ、ビューア、WASM を接続する。
+ * アセンブリ時はパーツ別メッシュ + ツリー表示に対応。
  */
 
 import { createEditor, getCode } from './editor';
 import { Viewer } from './viewer';
-import { initWasm, evaluateCode, exportStl, type MeshData } from './wasm-bridge';
+import { initWasm, evaluateParts, exportStl, exportStep, type PartsResult } from './wasm-bridge';
 
 /** ステータスバーを更新する */
 function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
@@ -15,11 +16,30 @@ function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info')
   statusBar.className = type;
 }
 
+/** アセンブリツリーを更新する */
+function updateAssemblyTree(parts: PartsResult['parts']): void {
+  const tree = document.getElementById('assembly-tree')!;
+  if (parts.length <= 1 && parts[0]?.name === 'shape') {
+    tree.innerHTML = '<div class="tree-item">単一形状</div>';
+    return;
+  }
+  tree.innerHTML = parts.map((p, i) => {
+    const r = Math.round(p.color[0] * 255);
+    const g = Math.round(p.color[1] * 255);
+    const b = Math.round(p.color[2] * 255);
+    const tris = p.positions.length / 9;
+    return `<div class="tree-item">
+      <span class="tree-color" style="background:rgb(${r},${g},${b})"></span>
+      <span class="tree-name">${p.name}</span>
+      <span class="tree-info">${tris} tri</span>
+    </div>`;
+  }).join('');
+}
+
 /** メインの初期化処理 */
 async function main(): Promise<void> {
   setStatus('WASM を初期化中...');
 
-  // WASM 初期化
   try {
     await initWasm();
     setStatus('準備完了', 'success');
@@ -28,48 +48,49 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ビューア初期化
   const canvas = document.getElementById('viewer-canvas') as HTMLCanvasElement;
   const viewer = new Viewer(canvas);
 
-  // 評価関数
   function runEvaluation(code: string): void {
     if (!code.trim()) {
       viewer.clearMesh();
       setStatus('コードが空です', 'info');
+      updateAssemblyTree([]);
       return;
     }
 
-    const result = evaluateCode(code);
+    const result = evaluateParts(code);
 
     if ('error' in result) {
       setStatus(result.error, 'error');
       viewer.clearMesh();
+      updateAssemblyTree([]);
       return;
     }
 
-    const meshData = result as MeshData;
-    if (meshData.positions.length === 0) {
+    const { parts } = result;
+    if (parts.length === 0 || parts.every(p => p.positions.length === 0)) {
       setStatus('形状が生成されませんでした', 'info');
       viewer.clearMesh();
+      updateAssemblyTree([]);
       return;
     }
 
-    const numTriangles = meshData.positions.length / 9;
-    viewer.updateMesh(meshData.positions, meshData.normals);
+    viewer.updateParts(parts);
+    updateAssemblyTree(parts);
+
+    const totalTris = parts.reduce((sum, p) => sum + p.positions.length / 9, 0);
+    const partCount = parts.length;
     setStatus(
-      `${numTriangles} 三角形を描画`,
+      partCount > 1
+        ? `${partCount} パーツ, ${totalTris} 三角形を描画`
+        : `${totalTris} 三角形を描画`,
       'success',
     );
   }
 
-  // エディタ初期化（コード変更時にデバウンス評価）
   const editorContainer = document.getElementById('editor-container')!;
-  const editor = createEditor(editorContainer, (code) => {
-    runEvaluation(code);
-  });
-
-  // 初回評価
+  const editor = createEditor(editorContainer, runEvaluation);
   runEvaluation(getCode(editor));
 
   // 評価ボタン
@@ -77,7 +98,7 @@ async function main(): Promise<void> {
     runEvaluation(getCode(editor));
   });
 
-  // Ctrl+Enter で評価
+  // Ctrl+Enter
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'Enter') {
       e.preventDefault();
@@ -85,25 +106,38 @@ async function main(): Promise<void> {
     }
   });
 
-  // STL エクスポートボタン
+  // STL エクスポート
   document.getElementById('btn-export-stl')!.addEventListener('click', () => {
-    const code = getCode(editor);
-    const result = exportStl(code);
-
+    const result = exportStl(getCode(editor));
     if ('error' in result) {
-      setStatus(`STL エクスポートエラー: ${result.error}`, 'error');
+      setStatus(`STL エラー: ${result.error}`, 'error');
       return;
     }
-
-    const blob = new Blob([result as BlobPart], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'ferncad-export.stl';
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(result as BlobPart, 'ferncad-export.stl', 'application/octet-stream');
     setStatus('STL をダウンロードしました', 'success');
   });
+
+  // STEP エクスポート
+  document.getElementById('btn-export-step')!.addEventListener('click', () => {
+    const result = exportStep(getCode(editor));
+    if ('error' in result) {
+      setStatus(`STEP エラー: ${result.error}`, 'error');
+      return;
+    }
+    downloadBlob(result as BlobPart, 'ferncad-export.step', 'application/octet-stream');
+    setStatus('STEP をダウンロードしました', 'success');
+  });
+}
+
+/** Blob をダウンロードする */
+function downloadBlob(data: BlobPart, filename: string, mimeType: string): void {
+  const blob = new Blob([data], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 main();

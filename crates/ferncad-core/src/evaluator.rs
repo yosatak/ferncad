@@ -20,6 +20,8 @@ pub struct Evaluator {
     env: Rc<RefCell<Env>>,
     /// 環境マップ（ID → 環境参照、クロージャ用）
     env_map: HashMap<usize, Rc<RefCell<Env>>>,
+    /// モジュールローダー
+    module_loader: crate::module::ModuleLoader,
 }
 
 impl Evaluator {
@@ -29,6 +31,7 @@ impl Evaluator {
         let mut evaluator = Self {
             env: Rc::clone(&env),
             env_map: HashMap::new(),
+            module_loader: crate::module::ModuleLoader::new(),
         };
         evaluator.register_env(Rc::clone(&env));
         evaluator.register_builtins();
@@ -90,6 +93,9 @@ impl Evaluator {
                 "defun" => return self.eval_defun(items, env),
                 "defpart" => return self.eval_defpart(items, env),
                 "defmeta" => return self.eval_defmeta(items, env),
+                "assembly" => return self.eval_assembly(items, env),
+                "require" => return self.eval_require(items, env),
+                "export" => return Ok(Value::Nil), // export は現在メタデータのみ
                 "let*" => return self.eval_let_star(items, env),
                 "if" => return self.eval_if(items, env),
                 "lambda" => return self.eval_lambda(items, env),
@@ -610,6 +616,214 @@ impl Evaluator {
         Ok(meta_value)
     }
 
+    /// `(require :module-name)` を評価する
+    ///
+    /// 埋め込み標準ライブラリからモジュールを検索し、現在の環境で評価する。
+    fn eval_require(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 2 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "require は (require :モジュール名) の形式が必要です".to_string(),
+            });
+        }
+
+        let module_name = match &items[1] {
+            Value::Keyword(k) => k.clone(),
+            Value::Str(s) => s.clone(),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "require の引数はキーワードまたは文字列が必要です".to_string(),
+                });
+            }
+        };
+
+        // 既に読み込み済みならスキップ
+        if self.module_loader.is_loaded(&module_name) {
+            return Ok(Value::Nil);
+        }
+
+        // 埋め込みモジュールを検索
+        let source = crate::module::ModuleLoader::find_builtin(&module_name).ok_or_else(|| {
+            FernError::EvalError {
+                loc: loc.clone(),
+                message: format!(
+                    "モジュール `{module_name}` が見つかりません。利用可能なモジュール: {:?}",
+                    crate::module::ModuleLoader::available_modules()
+                ),
+            }
+        })?;
+
+        // モジュールを評価
+        let exprs = crate::parser::parse(source)?;
+        for expr in &exprs {
+            self.eval(expr, env)?;
+        }
+
+        self.module_loader.mark_loaded(&module_name);
+        Ok(Value::Nil)
+    }
+
+    /// `(assembly "name" "doc" (place ...) (place ...) (mate ...) ...)` を評価する
+    fn eval_assembly(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 2 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "assembly は (assembly \"名前\" ...) の形式が必要です".to_string(),
+            });
+        }
+
+        // 名前（文字列）
+        let name = match &items[1] {
+            Value::Str(s) => s.clone(),
+            Value::Symbol(s) => s.clone(),
+            _ => "unnamed".to_string(),
+        };
+
+        // docstring（オプション）
+        let (docstring, body_start) = if items.len() > 2 && matches!(&items[2], Value::Str(_)) {
+            match &items[2] {
+                Value::Str(s) => (s.clone(), 3),
+                _ => (String::new(), 2),
+            }
+        } else {
+            (String::new(), 2)
+        };
+
+        // アセンブリスコープ環境
+        let asm_env = Env::new_child(Rc::clone(env));
+        self.register_env(Rc::clone(&asm_env));
+
+        let mut parts = Vec::new();
+        let mut constraints = Vec::new();
+
+        // 本体の各式を評価
+        for expr in &items[body_start..] {
+            let result = self.eval(expr, &asm_env)?;
+
+            // place の結果をパーツとして収集
+            if let Value::List(ref list) = result {
+                if list.len() >= 2 && matches!(&list[0], Value::Keyword(_)) {
+                    // place 結果: [name_keyword, shape, nil, position]
+                    if let Some(pi) = self.extract_part_instance(list, env)? {
+                        parts.push(pi);
+                        continue;
+                    }
+                }
+            }
+
+            // 制約値を収集
+            if let Some(constraint) = self.try_extract_constraint(&result) {
+                constraints.push(constraint);
+            }
+        }
+
+        // 色の自動割り当て
+        for (i, part) in parts.iter_mut().enumerate() {
+            part.color = crate::assembly::part_color(i);
+        }
+
+        let assembly = crate::assembly::AssemblyDef {
+            name,
+            docstring,
+            parts,
+            constraints,
+        };
+
+        Ok(Value::Assembly(Arc::new(assembly)))
+    }
+
+    /// 制約値から Constraint を抽出する
+    fn try_extract_constraint(&self, value: &Value) -> Option<crate::assembly::Constraint> {
+        match value {
+            Value::List(items) if items.len() >= 2 => {
+                if let Value::Symbol(s) = &items[0] {
+                    match s.as_str() {
+                        "constraint-mate" => {
+                            if let (Value::FaceRef(f1), Value::FaceRef(f2)) = (&items[1], &items[2])
+                            {
+                                let offset =
+                                    items.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
+                                return Some(crate::assembly::Constraint::Mate {
+                                    face1: f1.clone(),
+                                    face2: f2.clone(),
+                                    offset,
+                                });
+                            }
+                        }
+                        "constraint-align-axis" => {
+                            if let (Value::AxisRef(a1), Value::AxisRef(a2)) = (&items[1], &items[2])
+                            {
+                                return Some(crate::assembly::Constraint::AlignAxis {
+                                    axis1: a1.clone(),
+                                    axis2: a2.clone(),
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// パーツデータリストから PartInstance を作成する
+    fn extract_part_instance(
+        &mut self,
+        data: &[Value],
+        _env: &Rc<RefCell<Env>>,
+    ) -> FernResult<Option<crate::assembly::PartInstance>> {
+        // data: [name_keyword, shape_value, part_def_or_nil, position]
+        if data.len() < 2 {
+            return Ok(None);
+        }
+        let name = match &data[0] {
+            Value::Keyword(k) => k.clone(),
+            Value::Str(s) => s.clone(),
+            _ => return Ok(None),
+        };
+
+        let shape = match &data[1] {
+            Value::Shape(s) => Some(Arc::clone(s)),
+            _ => None,
+        };
+
+        let part_def = data.get(2).and_then(|v| {
+            if let Value::PartDef(pd) = v {
+                Some(Arc::clone(pd))
+            } else {
+                None
+            }
+        });
+
+        let dummy_part_def = part_def.unwrap_or_else(|| {
+            Arc::new(PartDef {
+                name: name.clone(),
+                docstring: String::new(),
+                meta: HashMap::new(),
+                params: Vec::new(),
+                faces: Vec::new(),
+                axes: Vec::new(),
+                body: Vec::new(),
+                env_id: 0,
+            })
+        });
+
+        let mut instance = crate::assembly::PartInstance::new(name, dummy_part_def, HashMap::new());
+        instance.shape = shape;
+
+        // 初期位置
+        if let Some(Value::Point3(p)) = data.get(3) {
+            instance.translate(*p);
+        }
+
+        Ok(Some(instance))
+    }
+
     /// Lambda をパラメータに適用する
     fn apply_lambda(
         &mut self,
@@ -817,6 +1031,15 @@ impl Evaluator {
         // 面・軸参照
         self.register_builtin("face", builtin_face);
         self.register_builtin("axis", builtin_axis);
+
+        // アセンブリ
+        self.register_builtin("place", builtin_place);
+
+        // 制約（アセンブリ内で使用）
+        self.register_builtin("mate", builtin_mate);
+        self.register_builtin("align-axis", builtin_align_axis);
+        self.register_builtin("fit", builtin_fit);
+        self.register_builtin("joint", builtin_joint);
     }
 
     /// 組み込み関数を登録する
@@ -1503,6 +1726,139 @@ fn builtin_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     }))
 }
 
+// === アセンブリ制約ビルトイン ===
+
+/// `(place :part shape :as :name :at #p(...))` — パーツを配置する
+/// 結果はアセンブリ環境の *assembly-parts* に蓄積される
+fn builtin_place(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+
+    let shape = kwargs.get("part").cloned().unwrap_or(Value::Nil);
+    let name = match kwargs.get("as") {
+        Some(Value::Keyword(k)) => Value::Keyword(k.clone()),
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: "`place` にはキーワード引数 `:as` が必要です".to_string(),
+            });
+        }
+    };
+    let position = kwargs
+        .get("at")
+        .cloned()
+        .unwrap_or(Value::Point3([0.0, 0.0, 0.0]));
+
+    // パーツデータをリストとして返す（eval_assembly が回収する）
+    Ok(Value::List(vec![name, shape, Value::Nil, position]))
+}
+
+/// `(mate face-ref1 face-ref2)` — 面を合わせる制約
+fn builtin_mate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() < 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`mate` は (mate face-ref1 face-ref2) の形式が必要です".to_string(),
+        });
+    }
+    let f1 = match &args[0] {
+        Value::FaceRef(r) => r.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "面参照".to_string(),
+                actual: args[0].type_name_ja().to_string(),
+            });
+        }
+    };
+    let f2 = match &args[1] {
+        Value::FaceRef(r) => r.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "面参照".to_string(),
+                actual: args[1].type_name_ja().to_string(),
+            });
+        }
+    };
+    Ok(Value::List(vec![
+        Value::Symbol("constraint-mate".to_string()),
+        Value::FaceRef(f1),
+        Value::FaceRef(f2),
+    ]))
+}
+
+/// `(align-axis axis-ref1 axis-ref2)` — 軸を揃える制約
+fn builtin_align_axis(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() < 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`align-axis` は (align-axis axis-ref1 axis-ref2) の形式が必要です"
+                .to_string(),
+        });
+    }
+    let a1 = match &args[0] {
+        Value::AxisRef(r) => r.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "軸参照".to_string(),
+                actual: args[0].type_name_ja().to_string(),
+            });
+        }
+    };
+    let a2 = match &args[1] {
+        Value::AxisRef(r) => r.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "軸参照".to_string(),
+                actual: args[1].type_name_ja().to_string(),
+            });
+        }
+    };
+    Ok(Value::List(vec![
+        Value::Symbol("constraint-align-axis".to_string()),
+        Value::AxisRef(a1),
+        Value::AxisRef(a2),
+    ]))
+}
+
+/// `(fit :shaft face-ref :hole face-ref :clearance 0.1 :type :clearance)` — はめ合い
+fn builtin_fit(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let shaft = kwargs.get("shaft").ok_or_else(|| FernError::EvalError {
+        loc: loc.clone(),
+        message: "`fit` には `:shaft` が必要です".to_string(),
+    })?;
+    let hole = kwargs.get("hole").ok_or_else(|| FernError::EvalError {
+        loc: loc.clone(),
+        message: "`fit` には `:hole` が必要です".to_string(),
+    })?;
+    Ok(Value::List(vec![
+        Value::Symbol("constraint-fit".to_string()),
+        shaft.clone(),
+        hole.clone(),
+    ]))
+}
+
+/// `(joint :type :fixed :parts (list :a :b))` — ジョイント定義
+fn builtin_joint(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let joint_type = kwargs
+        .get("type")
+        .cloned()
+        .unwrap_or(Value::Keyword("fixed".to_string()));
+    let parts = kwargs
+        .get("parts")
+        .cloned()
+        .unwrap_or(Value::List(Vec::new()));
+    Ok(Value::List(vec![
+        Value::Symbol("constraint-joint".to_string()),
+        joint_type,
+        parts,
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1926,6 +2282,91 @@ mod tests {
                 assert_eq!(r.axis_name, "center");
             }
             other => panic!("期待: AxisRef、実際: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_assembly_basic() {
+        let result = eval(
+            r#"
+            (assembly "test"
+              (place :part (box :width 10 :depth 10 :height 5) :as :plate)
+              (place :part (cylinder :radius 2 :height 15) :as :pin))
+            "#,
+        );
+        match result {
+            Value::Assembly(asm) => {
+                assert_eq!(asm.name, "test");
+                assert_eq!(asm.parts.len(), 2);
+                assert_eq!(asm.parts[0].name, "plate");
+                assert_eq!(asm.parts[1].name, "pin");
+            }
+            other => panic!("期待: Assembly、実際: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_assembly_with_constraints() {
+        let result = eval(
+            r#"
+            (assembly "constrained"
+              (place :part (box :width 10 :depth 10 :height 5) :as :base)
+              (place :part (cylinder :radius 2 :height 10) :as :pin)
+              (mate (face :pin :bottom) (face :base :top))
+              (align-axis (axis :pin :center) (axis :base :hole)))
+            "#,
+        );
+        match result {
+            Value::Assembly(asm) => {
+                assert_eq!(asm.parts.len(), 2);
+                assert_eq!(asm.constraints.len(), 2);
+            }
+            other => panic!("期待: Assembly、実際: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_assembly_with_position() {
+        let result = eval(
+            r#"
+            (assembly "positioned"
+              (place :part (box :width 10 :depth 10 :height 5) :as :plate)
+              (place :part (sphere :radius 3) :as :ball :at #p(0 0 10)))
+            "#,
+        );
+        match result {
+            Value::Assembly(asm) => {
+                assert_eq!(asm.parts.len(), 2);
+                // ball の transform に Z=10 のオフセット
+                let ball = &asm.parts[1];
+                assert!((ball.transform[14] - 10.0).abs() < 1e-10);
+            }
+            other => panic!("期待: Assembly、実際: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_require_m3_bolt() {
+        let result = eval(
+            r#"
+            (require :ferncad-std/m3-bolt)
+            (m3-bolt :length 20)
+            "#,
+        );
+        assert!(
+            matches!(result, Value::Shape(_)),
+            "require + m3-bolt で Shape が返るべき: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_require_unknown_module() {
+        let err = eval_err("(require :nonexistent-module)");
+        match err {
+            FernError::EvalError { message, .. } => {
+                assert!(message.contains("見つかりません"));
+            }
+            other => panic!("想定外のエラー: {other:?}"),
         }
     }
 }

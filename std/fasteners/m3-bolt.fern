@@ -1,0 +1,57 @@
+;;;; m3-bolt.fern
+;;;; ========================================
+;;;; JIS B 1176 準拠 M3 六角穴付きボルト（簡易版）
+;;;; ========================================
+
+;;; --- JIS B 1176 M3 規格定数 ---
+
+(defvar +m3-nominal-diameter+ 3.0)    ; 呼び径 (mm)
+(defvar +m3-head-height+ 3.0)         ; 頭部高さ (mm)
+(defvar +m3-head-across-flats+ 5.5)   ; 二面幅 (mm)
+(defvar +m3-socket-width+ 2.5)        ; 六角穴幅 (mm)
+(defvar +m3-socket-depth+ 2.5)        ; 六角穴深さ (mm)
+
+;;; --- メインパーツ定義 ---
+
+(defpart m3-bolt
+  "JIS B 1176 準拠の M3 六角穴付きボルト（簡易版）。
+
+   PARAMS:
+     length : ボルト全長（頭部込み）。範囲: 6-50 mm
+
+   使用例:
+     (m3-bolt :length 20)"
+
+  :meta (:category :fastener
+         :standard "JIS B 1176"
+         :material :steel
+         :description "M3六角穴付きボルト")
+
+  :params ((length :: length :default 16.0 :doc "ボルト全長（頭部込み）(mm)"))
+
+  :faces ((:head-top "頭部上面")
+          (:head-bottom "着座面")
+          (:tip "先端面"))
+
+  :axes ((:center "ボルト中心軸"))
+
+  :body
+  (let* (;; 頭部：六角柱
+         (head-radius (/ +m3-head-across-flats+ 2.0))
+         (head (prism :sides 6
+                      :radius head-radius
+                      :height +m3-head-height+))
+
+         ;; シャフト：円柱（ネジ山省略）
+         (shaft-length (- length +m3-head-height+))
+         (shaft (cylinder :radius (/ +m3-nominal-diameter+ 2)
+                          :height shaft-length))
+
+         ;; シャフトを頭部の下に配置（頭部高さ 3mm 分下へ）
+         (shaft-offset (- 0 +m3-head-height+))
+         (shaft-placed (translate :shape shaft
+                                  :by (list 0.0 0.0 shaft-offset))))
+
+    (union head shaft-placed)))
+
+(export m3-bolt)

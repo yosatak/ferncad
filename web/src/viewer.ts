@@ -2,10 +2,19 @@
  * Three.js 3D ビューア
  *
  * メッシュの表示、OrbitControls、ライティングを管理する。
+ * アセンブリ時はパーツごとに色分けしたメッシュを表示する。
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/** パーツメッシュの情報 */
+export interface PartMeshData {
+  name: string;
+  positions: Float32Array;
+  normals: Float32Array;
+  color: [number, number, number];
+}
 
 /** 3D ビューアクラス */
 export class Viewer {
@@ -13,15 +22,12 @@ export class Viewer {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
-  private mesh: THREE.Mesh | null = null;
-  private wireframe: THREE.LineSegments | null = null;
+  private partsGroup: THREE.Group;
 
   constructor(canvas: HTMLCanvasElement) {
-    // シーン
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1a2e);
 
-    // カメラ
     this.camera = new THREE.PerspectiveCamera(
       45,
       canvas.clientWidth / canvas.clientHeight,
@@ -31,115 +37,110 @@ export class Viewer {
     this.camera.position.set(40, 30, 40);
     this.camera.lookAt(0, 0, 0);
 
-    // レンダラー
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-    });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
 
     // ライティング
-    const ambientLight = new THREE.AmbientLight(0x404040, 2);
-    this.scene.add(ambientLight);
-
+    this.scene.add(new THREE.AmbientLight(0x404040, 2));
     const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight1.position.set(50, 80, 50);
     this.scene.add(dirLight1);
-
     const dirLight2 = new THREE.DirectionalLight(0x4488ff, 0.5);
     dirLight2.position.set(-30, -20, -50);
     this.scene.add(dirLight2);
 
-    // グリッド
+    // グリッド + 軸
     const grid = new THREE.GridHelper(100, 20, 0x444466, 0x333355);
-    grid.rotation.x = Math.PI / 2; // XY平面に配置
+    grid.rotation.x = Math.PI / 2;
     this.scene.add(grid);
-
-    // 軸ヘルパー
-    const axes = new THREE.AxesHelper(15);
-    this.scene.add(axes);
+    this.scene.add(new THREE.AxesHelper(15));
 
     // OrbitControls
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
-    this.controls.target.set(0, 0, 0);
 
-    // リサイズ対応
+    // パーツグループ
+    this.partsGroup = new THREE.Group();
+    this.scene.add(this.partsGroup);
+
+    // リサイズ
     const resizeObserver = new ResizeObserver(() => {
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      this.camera.aspect = width / height;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(width, height);
+      this.renderer.setSize(w, h);
     });
     resizeObserver.observe(canvas);
 
-    // アニメーションループ
     this.animate();
   }
 
-  /** メッシュを更新する */
+  /** 単一メッシュを更新する（後方互換） */
   updateMesh(positions: Float32Array, normals: Float32Array): void {
-    // 既存のメッシュを削除
-    if (this.mesh) {
-      this.scene.remove(this.mesh);
-      this.mesh.geometry.dispose();
-      (this.mesh.material as THREE.Material).dispose();
+    this.updateParts([{
+      name: 'shape',
+      positions,
+      normals,
+      color: [0.53, 0.53, 0.80],
+    }]);
+  }
+
+  /** パーツごとのメッシュを更新する */
+  updateParts(parts: PartMeshData[]): void {
+    this.clearMesh();
+
+    for (const part of parts) {
+      if (part.positions.length === 0) continue;
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(part.normals, 3));
+
+      const color = new THREE.Color(part.color[0], part.color[1], part.color[2]);
+      const material = new THREE.MeshStandardMaterial({
+        color,
+        metalness: 0.2,
+        roughness: 0.6,
+        side: THREE.DoubleSide,
+        flatShading: true,
+      });
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = part.name;
+      this.partsGroup.add(mesh);
+
+      // ワイヤーフレーム
+      const edges = new THREE.EdgesGeometry(geometry, 15);
+      const edgeMat = new THREE.LineBasicMaterial({
+        color: 0x444466,
+        transparent: true,
+        opacity: 0.3,
+      });
+      const wireframe = new THREE.LineSegments(edges, edgeMat);
+      wireframe.name = `${part.name}-wireframe`;
+      this.partsGroup.add(wireframe);
     }
-    if (this.wireframe) {
-      this.scene.remove(this.wireframe);
-      this.wireframe.geometry.dispose();
-      (this.wireframe.material as THREE.Material).dispose();
-    }
-
-    if (positions.length === 0) return;
-
-    // ジオメトリ作成
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-
-    // メッシュ作成
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x8888cc,
-      metalness: 0.2,
-      roughness: 0.6,
-      side: THREE.DoubleSide,
-      flatShading: true,
-    });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.scene.add(this.mesh);
-
-    // ワイヤーフレーム
-    const edgesGeometry = new THREE.EdgesGeometry(geometry, 15);
-    const edgesMaterial = new THREE.LineBasicMaterial({
-      color: 0x444466,
-      transparent: true,
-      opacity: 0.3,
-    });
-    this.wireframe = new THREE.LineSegments(edgesGeometry, edgesMaterial);
-    this.scene.add(this.wireframe);
   }
 
   /** メッシュをクリアする */
   clearMesh(): void {
-    if (this.mesh) {
-      this.scene.remove(this.mesh);
-      this.mesh.geometry.dispose();
-      (this.mesh.material as THREE.Material).dispose();
-      this.mesh = null;
-    }
-    if (this.wireframe) {
-      this.scene.remove(this.wireframe);
-      this.wireframe.geometry.dispose();
-      (this.wireframe.material as THREE.Material).dispose();
-      this.wireframe = null;
+    while (this.partsGroup.children.length > 0) {
+      const child = this.partsGroup.children[0];
+      this.partsGroup.remove(child);
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+      if (child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
     }
   }
 
-  /** アニメーションループ */
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();

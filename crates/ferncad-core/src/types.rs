@@ -47,6 +47,8 @@ pub enum Value {
     FaceRef(crate::face::FaceRef),
     /// 軸への参照
     AxisRef(crate::face::AxisRef),
+    /// アセンブリ定義
+    Assembly(Arc<crate::assembly::AssemblyDef>),
 }
 
 impl Value {
@@ -108,6 +110,7 @@ impl Value {
             Value::PartDef(_) => "パーツ定義",
             Value::FaceRef(_) => "面参照",
             Value::AxisRef(_) => "軸参照",
+            Value::Assembly(_) => "アセンブリ",
         }
     }
 }
@@ -143,6 +146,7 @@ impl fmt::Display for Value {
             Value::PartDef(def) => write!(f, "<part:{}>", def.name),
             Value::FaceRef(r) => write!(f, "<face:{}:{}>", r.instance_name, r.face_name),
             Value::AxisRef(r) => write!(f, "<axis:{}:{}>", r.instance_name, r.axis_name),
+            Value::Assembly(a) => write!(f, "<assembly:{}>", a.name),
         }
     }
 }
