@@ -3,6 +3,7 @@
 /// Usage:
 ///   ferncad <input.fern> --stl <output.stl>
 ///   ferncad <input.fern> --step <output.step>
+///   ferncad <input.fern> --segments <n>
 use std::fs;
 use std::process;
 
@@ -28,9 +29,10 @@ fn main() {
         }
     };
 
-    // Parse export flags
+    // Parse flags
     let mut stl_output: Option<String> = None;
     let mut step_output: Option<String> = None;
+    let mut segments: Option<u32> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -48,6 +50,17 @@ fn main() {
                     process::exit(1);
                 }));
             }
+            "--segments" => {
+                i += 1;
+                let val = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("error: --segments requires a number");
+                    process::exit(1);
+                });
+                segments = Some(val.parse::<u32>().unwrap_or_else(|_| {
+                    eprintln!("error: --segments must be a positive integer, got: {val}");
+                    process::exit(1);
+                }));
+            }
             other => {
                 eprintln!("error: unknown option: {other}");
                 print_usage();
@@ -56,6 +69,13 @@ fn main() {
         }
         i += 1;
     }
+
+    // Prepend *resolution* override if --segments was given
+    let source = if let Some(seg) = segments {
+        format!("(defvar *resolution* {seg})\n{source}")
+    } else {
+        source
+    };
 
     if stl_output.is_none() && step_output.is_none() {
         // Just evaluate and print result
@@ -71,17 +91,53 @@ fn main() {
     }
 
     if let Some(path) = stl_output {
-        match ferncad_cad::realize::eval_and_realize(&source) {
-            Ok(mesh) => {
-                let bytes = ferncad_cad::export::export_stl_bytes(&mesh).unwrap_or_else(|e| {
-                    eprintln!("error: STL export failed: {e}");
-                    process::exit(1);
-                });
-                fs::write(&path, bytes).unwrap_or_else(|e| {
+        match ferncad_cad::assembly_realize::eval_and_realize_parts(&source) {
+            Ok(parts) if parts.len() > 1 => {
+                // Assembly: export each part as <dir>/<stem>-<name>.stl
+                let dir = std::path::Path::new(&path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                let stem = std::path::Path::new(&path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("part");
+
+                for part in &parts {
+                    let part_path = dir.join(format!("{}-{}.stl", stem, part.name));
+                    let bytes =
+                        ferncad_cad::export::export_stl_bytes(&part.mesh).unwrap_or_else(|e| {
+                            eprintln!("error: STL export failed for {}: {e}", part.name);
+                            process::exit(1);
+                        });
+                    fs::write(&part_path, bytes).unwrap_or_else(|e| {
+                        eprintln!("error: cannot write {}: {e}", part_path.display());
+                        process::exit(1);
+                    });
+                    eprintln!(
+                        "STL exported: {} ({} triangles)",
+                        part_path.display(),
+                        part.mesh.triangle_count()
+                    );
+                }
+            }
+            Ok(parts) if parts.len() == 1 => {
+                let bytes =
+                    ferncad_cad::export::export_stl_bytes(&parts[0].mesh).unwrap_or_else(|e| {
+                        eprintln!("error: STL export failed: {e}");
+                        process::exit(1);
+                    });
+                fs::write(&path, &bytes).unwrap_or_else(|e| {
                     eprintln!("error: cannot write {path}: {e}");
                     process::exit(1);
                 });
-                eprintln!("STL exported: {path} ({} triangles)", mesh.triangle_count());
+                eprintln!(
+                    "STL exported: {path} ({} triangles)",
+                    parts[0].mesh.triangle_count()
+                );
+            }
+            Ok(_) => {
+                eprintln!("error: no shapes to export");
+                process::exit(1);
             }
             Err(e) => {
                 eprintln!("error: {e}");
@@ -124,7 +180,13 @@ fn print_usage() {
     eprintln!("ferncad v0.1.0 — Lisp CAD modeler");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  ferncad <input.fern>                  Evaluate and print result");
-    eprintln!("  ferncad <input.fern> --stl <out.stl>  Export as STL (triangulated mesh)");
-    eprintln!("  ferncad <input.fern> --step <out.step> Export as STEP (exact BREP geometry)");
+    eprintln!("  ferncad <input.fern>                    Evaluate and print result");
+    eprintln!(
+        "  ferncad <input.fern> --stl <out.stl>    Export as STL (assembly → per-part files)"
+    );
+    eprintln!("  ferncad <input.fern> --step <out.step>  Export as STEP (exact BREP geometry)");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --segments <n>  Set mesh resolution (default: 16, higher = smoother)");
+    eprintln!("                  Can also be set in .fern: (defvar *resolution* 64)");
 }
