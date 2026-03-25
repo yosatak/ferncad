@@ -11,7 +11,8 @@ use std::sync::Arc;
 use crate::env::Env;
 use crate::error::{FernError, FernResult, SourceLocation};
 use crate::types::{
-    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, ShapeNode, Value, DEFAULT_SEGMENTS,
+    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, PathNode, ShapeNode, Value,
+    DEFAULT_SEGMENTS,
 };
 
 /// Evaluator
@@ -42,6 +43,18 @@ impl Evaluator {
     fn register_env(&mut self, env: Rc<RefCell<Env>>) {
         let id = env.borrow().id;
         self.env_map.insert(id, env);
+    }
+
+    /// Get the current `*resolution*` value (global segment count)
+    pub fn resolution(&self) -> u32 {
+        let dummy_loc = SourceLocation { line: 0, col: 0 };
+        self.env
+            .borrow()
+            .lookup("*resolution*", &dummy_loc)
+            .ok()
+            .and_then(|v| v.as_number())
+            .map(|n| n as u32)
+            .unwrap_or(DEFAULT_SEGMENTS)
     }
 
     /// Evaluate source code
@@ -1189,6 +1202,10 @@ impl Evaluator {
         self.env
             .borrow_mut()
             .define("pi".to_string(), Value::Float(std::f64::consts::PI));
+        self.env.borrow_mut().define(
+            "*resolution*".to_string(),
+            Value::Int(DEFAULT_SEGMENTS as i64),
+        );
 
         // Debug
         self.register_builtin("print", builtin_print);
@@ -1232,8 +1249,18 @@ impl Evaluator {
 
         // Profile operations
         self.register_builtin("polygon", builtin_polygon);
+        self.register_builtin("circle", builtin_circle);
         self.register_builtin("extrude", builtin_extrude);
         self.register_builtin("revolve", builtin_revolve);
+
+        // Path constructors
+        self.register_builtin("helix", builtin_helix);
+        self.register_builtin("arc", builtin_arc);
+        self.register_builtin("bezier", builtin_bezier);
+
+        // Sweep & Loft
+        self.register_builtin("sweep", builtin_sweep);
+        self.register_builtin("loft", builtin_loft);
 
         // Edge operations
         self.register_builtin("chamfer", builtin_chamfer);
@@ -2200,6 +2227,239 @@ fn extract_polygon_points(val: &Value, loc: &SourceLocation) -> FernResult<Vec<[
     Ok(points)
 }
 
+/// `(circle :radius r :segments s)` — generate a polygon approximation of a circle
+fn builtin_circle(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let radius = require_kwarg_f64(&kwargs, "radius", "circle", loc)?;
+    let segments = get_kwarg_f64(&kwargs, "segments", loc)?
+        .map(|s| s as u32)
+        .unwrap_or(DEFAULT_SEGMENTS);
+
+    if radius <= 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`circle` requires positive radius".to_string(),
+        });
+    }
+
+    let mut points = Vec::with_capacity(segments as usize);
+    for i in 0..segments {
+        let theta = 2.0 * std::f64::consts::PI * i as f64 / segments as f64;
+        points.push(Value::List(vec![
+            Value::Float(radius * theta.cos()),
+            Value::Float(radius * theta.sin()),
+        ]));
+    }
+    Ok(Value::List(points))
+}
+
+// === Path constructors ===
+
+/// `(helix :radius r :pitch p :turns n)` — helical path in 3D
+fn builtin_helix(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let radius = require_kwarg_f64(&kwargs, "radius", "helix", loc)?;
+    let pitch = require_kwarg_f64(&kwargs, "pitch", "helix", loc)?;
+    let turns = require_kwarg_f64(&kwargs, "turns", "helix", loc)?;
+
+    if radius < 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`helix` requires non-negative radius".to_string(),
+        });
+    }
+    if turns <= 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`helix` requires positive turns".to_string(),
+        });
+    }
+
+    Ok(Value::Path(Arc::new(PathNode::Helix {
+        radius,
+        pitch,
+        turns,
+    })))
+}
+
+/// `(arc :radius r :angle a)` — circular arc path in XY plane
+fn builtin_arc(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let radius = require_kwarg_f64(&kwargs, "radius", "arc", loc)?;
+    let angle = get_kwarg_f64(&kwargs, "angle", loc)?.unwrap_or(2.0 * std::f64::consts::PI);
+
+    if radius <= 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`arc` requires positive radius".to_string(),
+        });
+    }
+
+    Ok(Value::Path(Arc::new(PathNode::Arc {
+        radius,
+        angle_rad: angle,
+    })))
+}
+
+/// `(bezier :points ((list x y z) ...))` — Bezier curve path
+fn builtin_bezier(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let points_val = require_kwarg(&kwargs, "points", "bezier", loc)?;
+    let points = extract_3d_points(points_val, loc)?;
+
+    if points.len() < 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`bezier` requires at least 2 control points".to_string(),
+        });
+    }
+
+    Ok(Value::Path(Arc::new(PathNode::Bezier { points })))
+}
+
+/// Extract 3D points from a Value::List of (list x y z)
+fn extract_3d_points(val: &Value, loc: &SourceLocation) -> FernResult<Vec<[f64; 3]>> {
+    let items = match val {
+        Value::List(items) => items,
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: "expected a list of 3D points".to_string(),
+            });
+        }
+    };
+
+    let mut points = Vec::new();
+    for item in items {
+        match item {
+            Value::List(coords) if coords.len() == 3 => {
+                let x = coords[0].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "point x must be a number".to_string(),
+                })?;
+                let y = coords[1].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "point y must be a number".to_string(),
+                })?;
+                let z = coords[2].as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "point z must be a number".to_string(),
+                })?;
+                points.push([x, y, z]);
+            }
+            Value::Vec3(v) => points.push(*v),
+            Value::Point3(p) => points.push(*p),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc: loc.clone(),
+                    message: format!("expected 3D point (list x y z), got: {}", item.type_name()),
+                });
+            }
+        }
+    }
+    Ok(points)
+}
+
+// === Sweep & Loft ===
+
+/// `(sweep :profile poly :path path :segments s)` — sweep profile along path
+fn builtin_sweep(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let profile = require_kwarg(&kwargs, "profile", "sweep", loc)?;
+    let path_val = require_kwarg(&kwargs, "path", "sweep", loc)?;
+    let segments = get_kwarg_f64(&kwargs, "segments", loc)?
+        .map(|s| s as u32)
+        .unwrap_or(DEFAULT_SEGMENTS);
+
+    let points = extract_polygon_points(profile, loc)?;
+    let path = match path_val {
+        Value::Path(p) => Arc::clone(p),
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: format!(
+                    "`sweep` requires a path for `:path`, got: {}. Use (helix ...), (arc ...), or (bezier ...) to create a path.",
+                    path_val.type_name()
+                ),
+            });
+        }
+    };
+
+    Ok(Value::Shape(Arc::new(ShapeNode::Sweep {
+        profile: points,
+        path,
+        segments,
+    })))
+}
+
+/// `(loft :profiles (p1 p2 ...) :at (z1 z2 ...) :segments s)` — loft between profiles
+fn builtin_loft(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (_, kwargs) = split_kwargs(args);
+    let profiles_val = require_kwarg(&kwargs, "profiles", "loft", loc)?;
+    let at_val = require_kwarg(&kwargs, "at", "loft", loc)?;
+    let segments = get_kwarg_f64(&kwargs, "segments", loc)?
+        .map(|s| s as u32)
+        .unwrap_or(DEFAULT_SEGMENTS);
+
+    // Extract list of profiles
+    let profile_list = match profiles_val {
+        Value::List(items) => items,
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: "`loft` requires a list of profiles for `:profiles`".to_string(),
+            });
+        }
+    };
+
+    let mut profiles = Vec::new();
+    for p in profile_list {
+        profiles.push(extract_polygon_points(p, loc)?);
+    }
+
+    // Extract Z positions
+    let positions = match at_val {
+        Value::List(items) => items
+            .iter()
+            .map(|v| {
+                v.as_number().ok_or_else(|| FernError::EvalError {
+                    loc: loc.clone(),
+                    message: "`loft` `:at` values must be numbers".to_string(),
+                })
+            })
+            .collect::<FernResult<Vec<f64>>>()?,
+        _ => {
+            return Err(FernError::EvalError {
+                loc: loc.clone(),
+                message: "`loft` requires a list of positions for `:at`".to_string(),
+            });
+        }
+    };
+
+    if profiles.len() != positions.len() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: format!(
+                "`loft` requires same number of profiles ({}) and positions ({})",
+                profiles.len(),
+                positions.len()
+            ),
+        });
+    }
+    if profiles.len() < 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`loft` requires at least 2 profiles".to_string(),
+        });
+    }
+
+    Ok(Value::Shape(Arc::new(ShapeNode::Loft {
+        profiles,
+        positions,
+        segments,
+    })))
+}
+
 /// Get a required keyword argument (any type)
 fn require_kwarg<'a>(
     kwargs: &'a HashMap<String, Value>,
@@ -2879,5 +3139,71 @@ mod tests {
             }
             other => panic!("expected List, got {other:?}"),
         }
+    }
+
+    // === Circle, Path, Sweep, Loft tests ===
+
+    #[test]
+    fn test_circle_builtin() {
+        let result = eval("(circle :radius 5 :segments 8)");
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 8);
+                // First point should be (5, 0)
+                if let Value::List(coords) = &items[0] {
+                    assert!((coords[0].as_number().unwrap() - 5.0).abs() < 1e-10);
+                    assert!((coords[1].as_number().unwrap()).abs() < 1e-10);
+                }
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_helix_builtin() {
+        let result = eval("(helix :radius 1 :pitch 1 :turns 1)");
+        assert!(matches!(result, Value::Path(_)));
+    }
+
+    #[test]
+    fn test_arc_builtin() {
+        let result = eval("(arc :radius 5 :angle pi)");
+        assert!(matches!(result, Value::Path(_)));
+    }
+
+    #[test]
+    fn test_bezier_builtin() {
+        let result = eval("(bezier :points (list (list 0 0 0) (list 5 3 0) (list 10 0 0)))");
+        assert!(matches!(result, Value::Path(_)));
+    }
+
+    #[test]
+    fn test_sweep_basic() {
+        let result = eval(
+            "(sweep :profile (circle :radius 1 :segments 8) \
+                    :path (helix :radius 5 :pitch 2 :turns 1) \
+                    :segments 16)",
+        );
+        assert!(matches!(result, Value::Shape(_)));
+    }
+
+    #[test]
+    fn test_loft_basic() {
+        let result = eval(
+            "(loft :profiles (list (circle :radius 5 :segments 8) \
+                                   (circle :radius 3 :segments 8)) \
+                   :at (list 0 10))",
+        );
+        assert!(matches!(result, Value::Shape(_)));
+    }
+
+    #[test]
+    fn test_sweep_type_error() {
+        let mut evaluator = Evaluator::new();
+        let result = evaluator
+            .eval_source("(sweep :profile (circle :radius 1 :segments 4) :path (box :width 1 :depth 1 :height 1))");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("path"), "error should mention 'path': {err}");
     }
 }

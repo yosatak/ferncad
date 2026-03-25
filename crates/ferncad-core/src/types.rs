@@ -51,6 +51,8 @@ pub enum Value {
     Assembly(Arc<crate::assembly::AssemblyDef>),
     /// Macro definition
     Macro(Arc<MacroDef>),
+    /// Path curve
+    Path(Arc<PathNode>),
 }
 
 impl Value {
@@ -86,6 +88,7 @@ impl Value {
             "keyword" => matches!(self, Value::Keyword(_)),
             "bool" => matches!(self, Value::Bool(_)),
             "shape" => matches!(self, Value::Shape(_)),
+            "path" => matches!(self, Value::Path(_)),
             "list" => matches!(self, Value::List(_)),
             _ => true, // Unknown type names always match (Phase 2 safety measure)
         }
@@ -114,6 +117,7 @@ impl Value {
             Value::AxisRef(_) => "axis-ref",
             Value::Assembly(_) => "assembly",
             Value::Macro(_) => "macro",
+            Value::Path(_) => "path",
         }
     }
 }
@@ -151,6 +155,7 @@ impl fmt::Display for Value {
             Value::AxisRef(r) => write!(f, "<axis:{}:{}>", r.instance_name, r.axis_name),
             Value::Assembly(a) => write!(f, "<assembly:{}>", a.name),
             Value::Macro(m) => write!(f, "<macro:{}>", m.name),
+            Value::Path(_) => write!(f, "<path>"),
         }
     }
 }
@@ -175,6 +180,7 @@ impl PartialEq for Value {
             (Value::Point3(a), Value::Point3(b)) => a == b,
             (Value::FaceRef(a), Value::FaceRef(b)) => a == b,
             (Value::AxisRef(a), Value::AxisRef(b)) => a == b,
+            (Value::Path(a), Value::Path(b)) => a == b,
             _ => false,
         }
     }
@@ -253,9 +259,108 @@ pub struct ParamSpec {
     pub doc: Option<String>,
 }
 
-/// Default segment count
 /// Default segment count (balanced with BSP CSG performance)
 pub const DEFAULT_SEGMENTS: u32 = 16;
+
+/// Path node — a parametric curve in 3D space
+#[derive(Debug, Clone, PartialEq)]
+pub enum PathNode {
+    /// Helix: constant radius, constant pitch
+    Helix { radius: f64, pitch: f64, turns: f64 },
+    /// Circular arc in XY plane
+    Arc { radius: f64, angle_rad: f64 },
+    /// Bezier curve through control points
+    Bezier { points: Vec<[f64; 3]> },
+}
+
+impl PathNode {
+    /// Evaluate position at parameter t in [0, 1]
+    pub fn position(&self, t: f64) -> [f64; 3] {
+        match self {
+            PathNode::Helix {
+                radius,
+                pitch,
+                turns,
+            } => {
+                let theta = 2.0 * std::f64::consts::PI * turns * t;
+                [
+                    radius * theta.cos(),
+                    radius * theta.sin(),
+                    pitch * turns * t,
+                ]
+            }
+            PathNode::Arc { radius, angle_rad } => {
+                let theta = angle_rad * t;
+                [radius * theta.cos(), radius * theta.sin(), 0.0]
+            }
+            PathNode::Bezier { points } => de_casteljau(points, t),
+        }
+    }
+
+    /// Evaluate tangent vector (unnormalized) at parameter t in [0, 1]
+    pub fn tangent(&self, t: f64) -> [f64; 3] {
+        match self {
+            PathNode::Helix {
+                radius,
+                pitch,
+                turns,
+            } => {
+                let omega = 2.0 * std::f64::consts::PI * turns;
+                let theta = omega * t;
+                [
+                    -radius * omega * theta.sin(),
+                    radius * omega * theta.cos(),
+                    pitch * turns,
+                ]
+            }
+            PathNode::Arc { radius, angle_rad } => {
+                let theta = angle_rad * t;
+                [
+                    -radius * angle_rad * theta.sin(),
+                    radius * angle_rad * theta.cos(),
+                    0.0,
+                ]
+            }
+            PathNode::Bezier { points } => bezier_tangent(points, t),
+        }
+    }
+}
+
+/// De Casteljau algorithm for evaluating a Bezier curve at parameter t
+fn de_casteljau(points: &[[f64; 3]], t: f64) -> [f64; 3] {
+    let mut work: Vec<[f64; 3]> = points.to_vec();
+    let n = work.len();
+    for level in 1..n {
+        for i in 0..n - level {
+            work[i] = [
+                work[i][0] * (1.0 - t) + work[i + 1][0] * t,
+                work[i][1] * (1.0 - t) + work[i + 1][1] * t,
+                work[i][2] * (1.0 - t) + work[i + 1][2] * t,
+            ];
+        }
+    }
+    work[0]
+}
+
+/// Bezier hodograph (derivative) at parameter t
+fn bezier_tangent(points: &[[f64; 3]], t: f64) -> [f64; 3] {
+    let n = points.len();
+    if n < 2 {
+        return [0.0, 0.0, 1.0];
+    }
+    // Hodograph control points: n-1 points, each = degree * (P[i+1] - P[i])
+    let degree = (n - 1) as f64;
+    let hodograph: Vec<[f64; 3]> = (0..n - 1)
+        .map(|i| {
+            [
+                degree * (points[i + 1][0] - points[i][0]),
+                degree * (points[i + 1][1] - points[i][1]),
+                degree * (points[i + 1][2] - points[i][2]),
+            ]
+        })
+        .collect();
+    de_casteljau(&hodograph, t)
+}
 
 /// CSG tree node (immutable, reference-counted)
 #[derive(Debug, Clone, PartialEq)]
@@ -330,6 +435,21 @@ pub enum ShapeNode {
         segments: u32,
     },
 
+    // === Sweep/Loft operations ===
+    /// Sweep a 2D profile along a 3D path
+    Sweep {
+        profile: Vec<[f64; 2]>,
+        path: Arc<PathNode>,
+        segments: u32,
+    },
+    /// Loft between multiple 2D profiles at specified Z positions
+    Loft {
+        profiles: Vec<Vec<[f64; 2]>>,
+        positions: Vec<f64>,
+        segments: u32,
+    },
+
+    // === Edge operations ===
     /// Chamfer all edges of a shape
     Chamfer {
         shape: Arc<ShapeNode>,
