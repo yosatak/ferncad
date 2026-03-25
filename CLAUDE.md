@@ -74,9 +74,19 @@ Dev server: `cd web && npm run dev` → `localhost:5173`
 - BSP mesh fallback when truck boolean operations fail (catch_unwind)
 - `segments` parameter preserved for backward compatibility but ignored by BREP
 
+### Phase 3 (complete)
+- defmacro / quasiquote with backquote syntax, &rest variadic params
+- extrude (2D polygon along Z) and revolve (2D profile around Z)
+- chamfer placeholder (truck 0.6 limitation), fillet/shell error messages
+- CodeMirror inline error diagnostics (linter extension)
+- Parameter slider UI for defpart params (live preview)
+- localStorage auto-save + named model save/load
+- Standard library: m3-nut, m4-bolt, m5-bolt, flat-washer, spring-washer
+- Tutorial and language reference documentation
+
 ### Known Limitations
 - Constraints use direct transformation (not a constraint solver)
-- defmacro / quasiquote not yet implemented (Phase 3)
+- fillet / shell not supported (truck 0.6 limitation)
 - require only works with built-in modules (file loading is CLI-only)
 - truck boolean operations can fail on complex geometry; BSP fallback used automatically
 - WASM binary is larger due to truck dependencies (~1MB vs ~240KB)

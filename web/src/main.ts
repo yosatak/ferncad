@@ -7,8 +7,9 @@
 
 import { createEditor, getCode } from './editor';
 import { Viewer } from './viewer';
-import { initWasm, evaluateParts, exportStl, exportStep, type PartsResult } from './wasm-bridge';
+import { initWasm, evaluateParts, exportStl, exportStep, extractParams, type PartsResult } from './wasm-bridge';
 import { saveCurrentCode, loadCurrentCode, saveModel, loadModel, listModels, deleteModel } from './storage';
+import { updateSliders, generateOverrides, clearOverrides } from './sliders';
 
 /** Update the status bar */
 function setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
@@ -89,17 +90,41 @@ async function main(): Promise<void> {
     );
   }
 
+  // Slider panel
+  const paramPanel = document.getElementById('param-panel')!;
+
+  function runWithSliders(code: string): void {
+    const overridePrefix = generateOverrides(new Map());
+    runEvaluation(overridePrefix + code);
+  }
+
+  function refreshSliders(code: string): void {
+    const parts = extractParams(code);
+    const allParams = parts.flatMap((p) => p.params);
+    updateSliders(paramPanel, allParams, (overrides) => {
+      const prefix = generateOverrides(overrides);
+      runEvaluation(prefix + getCode(editor));
+    });
+  }
+
   // Load saved code or use default
   const savedCode = loadCurrentCode();
   const editorContainer = document.getElementById('editor-container')!;
   const editor = createEditor(editorContainer, (code) => {
     saveCurrentCode(code);
+    clearOverrides();
+    refreshSliders(code);
     runEvaluation(code);
   }, savedCode ?? undefined);
-  runEvaluation(getCode(editor));
+  const initialCode = getCode(editor);
+  runEvaluation(initialCode);
+  refreshSliders(initialCode);
 
   document.getElementById('btn-evaluate')!.addEventListener('click', () => {
-    runEvaluation(getCode(editor));
+    const code = getCode(editor);
+    clearOverrides();
+    refreshSliders(code);
+    runEvaluation(code);
   });
 
   document.addEventListener('keydown', (e) => {

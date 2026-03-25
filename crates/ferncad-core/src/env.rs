@@ -68,6 +68,11 @@ impl Env {
     }
 
     /// Check whether a variable is defined
+    /// Iterate over bindings in this environment (not including parents)
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.bindings.iter()
+    }
+
     pub fn is_defined(&self, name: &str) -> bool {
         if self.bindings.contains_key(name) {
             return true;

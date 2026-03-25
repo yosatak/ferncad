@@ -10,6 +10,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@codemirror/lint": "^6.9.5",
     "three": "^0.170.0"
   },
   "devDependencies": {

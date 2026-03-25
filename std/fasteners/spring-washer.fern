@@ -1,0 +1,34 @@
+;;;; spring-washer.fern
+;;;; JIS B 1251 spring lock washers (visual approximation)
+
+(defpart spring-washer
+  "JIS B 1251 spring lock washer (visual approximation).
+
+   Approximated as a flat ring with a gap. True helical geometry
+   is not yet supported.
+
+   PARAMS:
+     size : nominal bolt size (3, 4, 5, etc.)"
+
+  :meta (:category :fastener
+         :standard "JIS B 1251"
+         :material :spring-steel
+         :description "Spring lock washer")
+
+  :params ((size :: length :default 3.0 :doc "nominal bolt size (mm)"))
+
+  :body
+  (let* ((inner (+ size 0.4))
+         (outer (* size 2.0))
+         (thickness (* size 0.27))
+         ;; Main ring
+         (ring (cylinder :radius (/ outer 2) :height thickness))
+         (hole (cylinder :radius (/ inner 2) :height (+ thickness 1.0)))
+         ;; Gap (small box to cut a slit)
+         (gap-width (* size 0.15))
+         (gap (box :width gap-width :depth outer :height (+ thickness 1.0)))
+         (gap-placed (translate :shape gap
+                                :by (list (/ outer 2) 0.0 0.0))))
+    (difference ring hole gap-placed)))
+
+(export spring-washer)

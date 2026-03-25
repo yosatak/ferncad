@@ -152,6 +152,49 @@ html, body {
   display: block;
 }
 
+/* Parameter sliders */
+#param-panel {
+  background: #252526;
+  border-bottom: 1px solid #3e3e3e;
+  padding: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+#param-panel.hidden {
+  display: none;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.slider-label {
+  width: 80px;
+  font-size: 11px;
+  color: #9cdcfe;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slider-input {
+  flex: 1;
+  height: 4px;
+  accent-color: #569cd6;
+}
+
+.slider-value {
+  width: 50px;
+  text-align: right;
+  font-size: 11px;
+  color: #b5cea8;
+  font-family: monospace;
+}
+
 /* Load dialog */
 #load-dialog .dialog-overlay {
   position: fixed;

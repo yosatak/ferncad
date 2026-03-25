@@ -81,13 +81,37 @@ pub fn evaluate_parts(source: &str) -> Result<String, JsValue> {
     Ok(json)
 }
 
-/// Check syntax only. Returns an error message string, or empty string on success.
+/// Check syntax and return diagnostics as JSON.
+///
+/// Returns `{"diagnostics":[]}` on success, or
+/// `{"diagnostics":[{"line":N,"col":N,"message":"...","severity":"error"}]}` on error.
 #[wasm_bindgen]
 pub fn check_syntax(source: &str) -> String {
     let mut evaluator = ferncad_core::evaluator::Evaluator::new();
     match evaluator.eval_source(source) {
-        Ok(_) => String::new(),
-        Err(e) => e.to_string(),
+        Ok(_) => r#"{"diagnostics":[]}"#.to_string(),
+        Err(e) => {
+            let (line, col) = extract_error_location(&e);
+            let msg = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+            format!(
+                r#"{{"diagnostics":[{{"line":{line},"col":{col},"message":"{msg}","severity":"error"}}]}}"#
+            )
+        }
+    }
+}
+
+/// Extract line/column from a FernError
+fn extract_error_location(e: &ferncad_core::error::FernError) -> (usize, usize) {
+    use ferncad_core::error::FernError;
+    match e {
+        FernError::LexError { loc, .. }
+        | FernError::UnmatchedOpenParen { loc }
+        | FernError::UnmatchedCloseParen { loc }
+        | FernError::ParseError { loc, .. }
+        | FernError::EvalError { loc, .. }
+        | FernError::UndefinedVariable { loc, .. }
+        | FernError::TypeError { loc, .. } => (loc.line, loc.col),
+        FernError::CadError { .. } => (0, 0),
     }
 }
 
@@ -106,6 +130,55 @@ pub fn export_step(source: &str) -> Result<Vec<u8>, JsValue> {
             .map_err(|e| JsValue::from_str(&format!("STEP export error: {e}"))),
         _ => Err(JsValue::from_str("STEP export requires a shape expression")),
     }
+}
+
+/// Extract defpart parameter specs from source code as JSON.
+///
+/// Returns JSON: `{"parts":[{"name":"...","params":[{"name":"...","type":"...","default":N,"doc":"..."}]}]}`
+#[wasm_bindgen]
+pub fn extract_params(source: &str) -> String {
+    let mut evaluator = ferncad_core::evaluator::Evaluator::new();
+    if evaluator.eval_source(source).is_err() {
+        return r#"{"parts":[]}"#.to_string();
+    }
+
+    let env = evaluator.global_env();
+    let env_ref = env.borrow();
+    let mut json = String::from(r#"{"parts":["#);
+    let mut first_part = true;
+
+    for (name, value) in env_ref.bindings() {
+        if let ferncad_core::types::Value::PartDef(part_def) = value {
+            if !first_part {
+                json.push(',');
+            }
+            first_part = false;
+            json.push_str(&format!(r#"{{"name":"{}","params":["#, name));
+            let mut first_param = true;
+            for param in &part_def.params {
+                if !first_param {
+                    json.push(',');
+                }
+                first_param = false;
+                let type_str = param.type_annotation.as_deref().unwrap_or("number");
+                let default_val = param
+                    .default
+                    .as_ref()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0);
+                let doc = param.doc.as_deref().unwrap_or("");
+                let doc_escaped = doc.replace('\\', "\\\\").replace('"', "\\\"");
+                json.push_str(&format!(
+                    r#"{{"name":"{}","type":"{type_str}","default":{default_val},"doc":"{doc_escaped}"}}"#,
+                    param.name
+                ));
+            }
+            json.push_str("]}");
+        }
+    }
+
+    json.push_str("]}");
+    json
 }
 
 /// Evaluate ferncad source and return the string representation of the result.

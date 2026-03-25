@@ -10,6 +10,7 @@ import init, {
   export_stl as wasmExportStl,
   export_step as wasmExportStep,
   check_syntax as wasmCheckSyntax,
+  extract_params as wasmExtractParams,
 } from '../pkg/ferncad_wasm.js';
 
 import type { PartMeshData } from './viewer';
@@ -87,7 +88,46 @@ export function exportStep(source: string): Uint8Array | { error: string } {
   }
 }
 
-/** Check syntax only */
-export function checkSyntax(source: string): string {
-  return wasmCheckSyntax(source);
+/** Part parameter spec */
+export interface ParamSpec {
+  name: string;
+  type: string;
+  default: number;
+  doc: string;
+}
+
+/** Part with parameters */
+export interface PartSpec {
+  name: string;
+  params: ParamSpec[];
+}
+
+/** Extract defpart parameter specs from source */
+export function extractParams(source: string): PartSpec[] {
+  try {
+    const json = wasmExtractParams(source);
+    const data = JSON.parse(json);
+    return data.parts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Diagnostic entry from syntax check */
+export interface DiagnosticEntry {
+  line: number;
+  col: number;
+  message: string;
+  severity: 'error' | 'warning';
+}
+
+/** Check syntax and return diagnostics */
+export function checkSyntax(source: string): DiagnosticEntry[] {
+  try {
+    const json = wasmCheckSyntax(source);
+    const data = JSON.parse(json);
+    return data.diagnostics ?? [];
+  } catch {
+    return [];
+  }
 }

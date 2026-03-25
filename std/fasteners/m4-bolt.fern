@@ -1,0 +1,38 @@
+;;;; m4-bolt.fern
+;;;; JIS B 1176 M4 hex socket cap screw
+
+(defvar +m4-nominal-diameter+ 4.0)
+(defvar +m4-head-height+ 4.0)
+(defvar +m4-head-across-flats+ 7.0)
+
+(defpart m4-bolt
+  "JIS B 1176 M4 hex socket cap screw.
+
+   PARAMS:
+     length : total length including head (mm)"
+
+  :meta (:category :fastener
+         :standard "JIS B 1176"
+         :material :steel
+         :description "M4 hex socket cap screw")
+
+  :params ((length :: length :default 20.0 :doc "total length (mm)"))
+
+  :faces ((:head-top "head top")
+          (:head-bottom "bearing surface")
+          (:tip "tip"))
+
+  :axes ((:center "bolt center axis"))
+
+  :body
+  (let* ((head (prism :sides 6
+                      :radius (/ +m4-head-across-flats+ 2.0)
+                      :height +m4-head-height+))
+         (shaft-length (- length +m4-head-height+))
+         (shaft (cylinder :radius (/ +m4-nominal-diameter+ 2)
+                          :height shaft-length))
+         (shaft-placed (translate :shape shaft
+                                  :by (list 0.0 0.0 (- 0 +m4-head-height+)))))
+    (union head shaft-placed)))
+
+(export m4-bolt)

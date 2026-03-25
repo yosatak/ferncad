@@ -1,0 +1,24 @@
+;; ferncad — Parametric Part Example
+;; A configurable bracket with defpart
+
+(defpart bracket
+  "L-shaped mounting bracket"
+  :meta (:category :structural
+         :material :aluminum
+         :description "L bracket")
+  :params ((width     :: length :default 30.0 :doc "bracket width")
+           (height    :: length :default 40.0 :doc "wall height")
+           (thickness :: length :default 3.0  :doc "material thickness")
+           (hole-r    :: length :default 2.5  :doc "mounting hole radius"))
+  :body
+  (let* ((base (box :width width :depth width :height thickness))
+         (wall (box :width thickness :depth width :height height))
+         (wall-placed (translate :shape wall
+                                 :by (list (/ (- width thickness) 2) 0 (/ height 2))))
+         ;; Mounting hole in the base
+         (hole (cylinder :radius hole-r :height (+ thickness 2)))
+         (body (union base wall-placed)))
+    (difference body hole)))
+
+;; Create with custom parameters
+(bracket :width 40 :height 50 :thickness 4)

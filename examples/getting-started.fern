@@ -1,0 +1,7 @@
+;; ferncad — Getting Started Example
+;; A simple shape with CSG operations
+
+;; A box with rounded corners (approximated with spheres)
+(difference
+  (box :width 20 :depth 20 :height 10)
+  (sphere :radius 12))

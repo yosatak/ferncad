@@ -1,0 +1,14 @@
+;; ferncad — Extrude and Revolve Examples
+
+;; T-shaped extrusion
+(extrude
+  :profile (polygon
+    (list 0 0)
+    (list 20 0)
+    (list 20 5)
+    (list 12.5 5)
+    (list 12.5 15)
+    (list 7.5 15)
+    (list 7.5 5)
+    (list 0 5))
+  :height 10)

@@ -14,10 +14,32 @@ struct BuiltinModule {
 }
 
 /// Embedded standard library
-const BUILTIN_MODULES: &[BuiltinModule] = &[BuiltinModule {
-    name: "ferncad-std/m3-bolt",
-    source: include_str!("../../../std/fasteners/m3-bolt.fern"),
-}];
+const BUILTIN_MODULES: &[BuiltinModule] = &[
+    BuiltinModule {
+        name: "ferncad-std/m3-bolt",
+        source: include_str!("../../../std/fasteners/m3-bolt.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/m3-nut",
+        source: include_str!("../../../std/fasteners/m3-nut.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/m4-bolt",
+        source: include_str!("../../../std/fasteners/m4-bolt.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/m5-bolt",
+        source: include_str!("../../../std/fasteners/m5-bolt.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/flat-washer",
+        source: include_str!("../../../std/fasteners/flat-washer.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/spring-washer",
+        source: include_str!("../../../std/fasteners/spring-washer.fern"),
+    },
+];
 
 /// Module loader
 #[derive(Debug, Default)]

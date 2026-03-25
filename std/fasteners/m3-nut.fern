@@ -1,0 +1,34 @@
+;;;; m3-nut.fern
+;;;; JIS B 1181 M3 hex nut
+
+(defvar +m3-nut-across-flats+ 5.5)  ; mm
+(defvar +m3-nut-height+ 2.4)        ; mm
+(defvar +m3-nut-bore+ 3.0)          ; mm
+
+(defpart m3-nut
+  "JIS B 1181 M3 hex nut.
+
+   A standard M3 hexagonal nut with 5.5mm across-flats
+   and 2.4mm height."
+
+  :meta (:category :fastener
+         :standard "JIS B 1181"
+         :material :steel
+         :description "M3 hex nut")
+
+  :params ()
+
+  :faces ((:top "top face")
+          (:bottom "bottom face (bearing surface)"))
+
+  :axes ((:center "center bore axis"))
+
+  :body
+  (let* ((hex (prism :sides 6
+                     :radius (/ +m3-nut-across-flats+ 2.0)
+                     :height +m3-nut-height+))
+         (bore (cylinder :radius (/ +m3-nut-bore+ 2.0)
+                         :height (+ +m3-nut-height+ 1.0))))
+    (difference hex bore)))
+
+(export m3-nut)

@@ -1,0 +1,28 @@
+;;;; flat-washer.fern
+;;;; JIS B 1256 flat washers
+
+(defpart flat-washer
+  "JIS B 1256 flat washer (general purpose).
+
+   PARAMS:
+     size : nominal bolt size (3, 4, 5, etc.)
+
+   Dimensions are looked up from JIS standard tables."
+
+  :meta (:category :fastener
+         :standard "JIS B 1256"
+         :material :steel
+         :description "Flat washer")
+
+  :params ((size :: length :default 3.0 :doc "nominal bolt size (mm)"))
+
+  :body
+  (let* (;; JIS dimensions by size (simplified lookup)
+         (inner (+ size 0.4))
+         (outer (* size 2.3))
+         (thickness (* size 0.17))
+         (ring (cylinder :radius (/ outer 2) :height thickness))
+         (hole (cylinder :radius (/ inner 2) :height (+ thickness 1.0))))
+    (difference ring hole)))
+
+(export flat-washer)

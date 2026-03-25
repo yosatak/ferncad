@@ -9,6 +9,8 @@ import { EditorState } from '@codemirror/state';
 import { StreamLanguage } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { linter, type Diagnostic } from '@codemirror/lint';
+import { checkSyntax } from './wasm-bridge';
 
 /** ferncad language StreamLanguage definition */
 const fernLanguage = StreamLanguage.define({
@@ -114,6 +116,30 @@ export function createEditor(
 ): EditorView {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Linter that calls WASM check_syntax and maps diagnostics to editor positions */
+  const fernLinter = linter((view) => {
+    const doc = view.state.doc;
+    const source = doc.toString();
+    const entries = checkSyntax(source);
+    const diagnostics: Diagnostic[] = [];
+    for (const entry of entries) {
+      if (entry.line < 1) continue;
+      const lineCount = doc.lines;
+      const lineNum = Math.min(entry.line, lineCount);
+      const line = doc.line(lineNum);
+      const col = Math.min(entry.col, line.length + 1);
+      const from = line.from + col - 1;
+      const to = Math.min(from + 1, line.to);
+      diagnostics.push({
+        from,
+        to,
+        severity: entry.severity === 'warning' ? 'warning' : 'error',
+        message: entry.message,
+      });
+    }
+    return diagnostics;
+  }, { delay: 500 });
+
   const state = EditorState.create({
     doc: initialCode ?? DEFAULT_CODE,
     extensions: [
@@ -121,6 +147,7 @@ export function createEditor(
       fernLanguage,
       syntaxHighlighting(fernHighlightStyle),
       darkTheme,
+      fernLinter,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           if (debounceTimer) clearTimeout(debounceTimer);
