@@ -7,3 +7,11 @@ description = "ferncad CAD kernel: primitive generation, CSG, STL export"
 [dependencies]
 ferncad-core = { path = "../ferncad-core" }
 thiserror = { workspace = true }
+
+# BREP kernel
+truck-modeling = { workspace = true }
+truck-topology = { workspace = true }
+truck-polymesh = { workspace = true }
+truck-meshalgo = { workspace = true }
+truck-shapeops = { workspace = true }
+truck-stepio = { workspace = true }

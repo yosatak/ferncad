@@ -18,6 +18,17 @@ thiserror = "2"
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 
+# BREP kernel
+truck-modeling = "0.6"
+truck-topology = "0.6"
+truck-polymesh = "0.6"
+truck-meshalgo = "0.4"
+truck-shapeops = "0.4"
+truck-stepio = "0.3"
+
 [profile.release]
 opt-level = 3
 lto = true
+
+[profile.release.package.ferncad-wasm]
+opt-level = "z"

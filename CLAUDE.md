@@ -39,8 +39,8 @@ Dev server: `cd web && npm run dev` → `localhost:5173`
 ## Crate Structure
 
 - `crates/ferncad-core` — Lexer (logos) / Parser (recursive descent) / Evaluator (tree-walk) / type definitions (Value, ShapeNode) — WASM-independent
-- `crates/ferncad-cad` — CAD kernel: primitive generation, BSP CSG (union/difference/intersection), transforms, STL export, assembly mesh realization
-- `crates/ferncad-wasm` — WASM bindings (evaluate, evaluate_parts, export_stl, check_syntax)
+- `crates/ferncad-cad` — CAD kernel: truck BREP (exact curves/surfaces), BSP CSG fallback, transforms, STL/STEP export, assembly mesh realization
+- `crates/ferncad-wasm` — WASM bindings (evaluate, evaluate_parts, export_stl, export_step, check_syntax)
 - `crates/ferncad-cli` — CLI tool
 - `std/` — Standard library (.fern files, embedded via `include_str!` at build time)
 
@@ -66,16 +66,26 @@ Dev server: `cd web && npm run dev` → `localhost:5173`
 - std/fasteners/m3-bolt.fern standard library
 - Web UI: assembly tree display, per-part coloring
 
+### BREP Migration (complete)
+- truck BREP kernel for exact curved geometry (NURBS surfaces)
+- All 6 primitives via BREP: box, sphere, cylinder, cone, prism, torus
+- CSG via truck: union, intersection, difference (Solid::not + and)
+- STEP export via truck-stepio
+- BSP mesh fallback when truck boolean operations fail (catch_unwind)
+- `segments` parameter preserved for backward compatibility but ignored by BREP
+
 ### Known Limitations
 - Constraints use direct transformation (not a constraint solver)
 - defmacro / quasiquote not yet implemented (Phase 3)
 - require only works with built-in modules (file loading is CLI-only)
-- BSP CSG can be slow with high segment counts (default: 16)
+- truck boolean operations can fail on complex geometry; BSP fallback used automatically
+- WASM binary is larger due to truck dependencies (~1MB vs ~240KB)
 
 ## Dependencies
 
 - logos 0.16, thiserror 2
 - wasm-bindgen 0.2, js-sys 0.3
+- truck-modeling 0.6, truck-topology 0.6, truck-polymesh 0.6, truck-meshalgo 0.4, truck-shapeops 0.4, truck-stepio 0.3
 
 ## Decision Priority
 

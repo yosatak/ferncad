@@ -91,6 +91,23 @@ pub fn check_syntax(source: &str) -> String {
     }
 }
 
+/// Evaluate ferncad source code and return STEP format data.
+///
+/// Uses the truck BREP kernel for exact geometry representation.
+#[wasm_bindgen]
+pub fn export_step(source: &str) -> Result<Vec<u8>, JsValue> {
+    let mut evaluator = ferncad_core::evaluator::Evaluator::new();
+    let result = evaluator
+        .eval_source(source)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    match result {
+        ferncad_core::types::Value::Shape(node) => ferncad_cad::step::export_step_bytes(&node)
+            .map_err(|e| JsValue::from_str(&format!("STEP export error: {e}"))),
+        _ => Err(JsValue::from_str("STEP export requires a shape expression")),
+    }
+}
+
 /// Evaluate ferncad source and return the string representation of the result.
 #[wasm_bindgen]
 pub fn eval_to_string(source: &str) -> Result<String, JsValue> {
