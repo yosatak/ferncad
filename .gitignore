@@ -1,6 +1,7 @@
 /target/
 /web/pkg/
 /web/node_modules/
+/web/dist/
 *.stl
 *.step
 

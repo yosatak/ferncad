@@ -1,0 +1,13 @@
+;; defpart パラメータデフォルト値テスト
+(defpart bracket
+  "L字ブラケット"
+  :params ((width  :: length :default 20.0 :doc "幅")
+           (height :: length :default 30.0 :doc "高さ")
+           (thick  :: length :default 3.0  :doc "厚み"))
+  :body
+  (union
+    (box :width width :depth thick :height height)
+    (box :width width :depth height :height thick)))
+
+;; デフォルト値で生成
+(bracket)

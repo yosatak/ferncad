@@ -1,0 +1,14 @@
+[package]
+name = "ferncad-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "ferncad WASM バインディング"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferncad-core = { path = "../ferncad-core" }
+ferncad-cad = { path = "../ferncad-cad" }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }

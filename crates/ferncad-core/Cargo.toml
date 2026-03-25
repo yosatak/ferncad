@@ -1,0 +1,10 @@
+[package]
+name = "ferncad-core"
+version = "0.1.0"
+edition = "2021"
+description = "ferncad コア: Lexer / Parser / Evaluator / 型定義"
+
+[dependencies]
+logos = { workspace = true }
+thiserror = { workspace = true }
+ordered-float = { workspace = true }

@@ -1,0 +1,11 @@
+;; defpart基本テスト
+(defpart my-part
+  "テスト用パーツ"
+  :meta (:category :test :material :steel :description "test")
+  :params ((size :: length :default 10.0 :doc "サイズ"))
+  :body
+  (difference
+    (box :width size :depth size :height size)
+    (sphere :radius (/ size 3) :segments 8)))
+
+(my-part :size 20.0)

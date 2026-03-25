@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ferncad — Lisp CAD Modeler</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <h1>ferncad</h1>
+      <div id="toolbar-actions">
+        <button id="btn-evaluate" title="評価 (Ctrl+Enter)">▶ 評価</button>
+        <button id="btn-export-stl" title="STLエクスポート">💾 STL</button>
+      </div>
+    </header>
+    <main id="workspace">
+      <div id="editor-panel">
+        <div id="editor-container"></div>
+        <div id="status-bar"></div>
+      </div>
+      <div id="viewer-panel">
+        <canvas id="viewer-canvas"></canvas>
+      </div>
+    </main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

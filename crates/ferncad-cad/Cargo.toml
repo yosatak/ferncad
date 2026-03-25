@@ -1,0 +1,9 @@
+[package]
+name = "ferncad-cad"
+version = "0.1.0"
+edition = "2021"
+description = "ferncad CAD カーネル: プリミティブ生成・CSG・STL エクスポート"
+
+[dependencies]
+ferncad-core = { path = "../ferncad-core" }
+thiserror = { workspace = true }
