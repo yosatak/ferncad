@@ -295,9 +295,9 @@ fn split_polygon(
         2 => back.push(polygon),  // Back
         _ => {
             // Spanning
-            let mut f_verts = Vec::new();
-            let mut b_verts = Vec::new();
             let n = polygon.vertices.len();
+            let mut f_verts = Vec::with_capacity(n + 1);
+            let mut b_verts = Vec::with_capacity(n + 1);
 
             for i in 0..n {
                 let j = (i + 1) % n;

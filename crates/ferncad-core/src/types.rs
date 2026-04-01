@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::error::SourceLocation;
+use crate::error::{SourceLocation, SourceSpan};
 
 /// Value type returned by the evaluator
 #[derive(Debug, Clone)]
@@ -35,8 +35,8 @@ pub enum Value {
     Nil,
     /// List
     List(Vec<Value>),
-    /// CSG shape node
-    Shape(Arc<ShapeNode>),
+    /// CSG shape node (with source location tracking)
+    Shape(Arc<TrackedShape>),
     /// Built-in function
     BuiltinFn(BuiltinFnDef),
     /// User-defined function (closure)
@@ -360,6 +360,31 @@ fn bezier_tangent(points: &[[f64; 3]], t: f64) -> [f64; 3] {
         })
         .collect();
     de_casteljau(&hodograph, t)
+}
+
+/// Shape node with source location tracking for editor↔viewer highlighting
+#[derive(Debug, Clone)]
+pub struct TrackedShape {
+    /// The underlying shape node (reference-counted for cheap cloning)
+    pub node: Arc<ShapeNode>,
+    /// Source span (byte range) of the expression that created this shape
+    pub span: SourceSpan,
+}
+
+impl TrackedShape {
+    /// Create a TrackedShape with a dummy span
+    pub fn untracked(node: ShapeNode) -> Self {
+        Self {
+            node: Arc::new(node),
+            span: SourceSpan::dummy(),
+        }
+    }
+}
+
+impl PartialEq for TrackedShape {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node // Span intentionally excluded from equality
+    }
 }
 
 /// CSG tree node (immutable, reference-counted)

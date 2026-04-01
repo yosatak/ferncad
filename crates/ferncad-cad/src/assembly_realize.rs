@@ -3,7 +3,7 @@
 //! Converts an AssemblyDef into per-part TriMesh instances.
 
 use ferncad_core::assembly::AssemblyDef;
-use ferncad_core::error::{FernError, FernResult};
+use ferncad_core::error::{FernError, FernResult, SourceSpan};
 
 use crate::mesh::TriMesh;
 use crate::realize;
@@ -18,6 +18,8 @@ pub struct PartMesh {
     pub mesh: TriMesh,
     /// Color (RGB 0-1)
     pub color: [f64; 3],
+    /// Source span (byte range) for editor↔viewer highlighting
+    pub span: SourceSpan,
 }
 
 /// Convert an assembly into per-part TriMesh instances
@@ -34,13 +36,15 @@ pub fn realize_assembly_with_resolution(
     min_segments: u32,
 ) -> FernResult<Vec<PartMesh>> {
     let mut result = Vec::new();
+    let mut cache = realize::RealizeCache::new();
 
     for part_instance in &assembly.parts {
-        let mesh = if let Some(shape) = &part_instance.shape {
-            realize::realize_with_resolution(shape, min_segments)?
+        let (mesh, span) = if let Some(tracked) = &part_instance.shape {
+            let m = realize::realize_with_cache(&tracked.node, min_segments, &mut cache)?;
+            (m, tracked.span.clone())
         } else {
             // No shape -> empty mesh
-            TriMesh::new()
+            (TriMesh::new(), SourceSpan::dummy())
         };
 
         // Apply transform matrix
@@ -57,6 +61,7 @@ pub fn realize_assembly_with_resolution(
             name: part_instance.name.clone(),
             mesh,
             color: part_instance.color,
+            span,
         });
     }
 
@@ -67,7 +72,23 @@ pub fn realize_assembly_with_resolution(
 ///
 /// Reads `*resolution*` from the evaluator environment to control mesh quality.
 pub fn eval_and_realize_parts(source: &str) -> FernResult<Vec<PartMesh>> {
+    eval_and_realize_parts_with_files(source, &[])
+}
+
+/// Evaluate source code with project file context and return meshes.
+///
+/// `files` is a list of `(filename, source)` pairs that are registered as
+/// user modules for `require` resolution.
+pub fn eval_and_realize_parts_with_files(
+    source: &str,
+    files: &[(String, String)],
+) -> FernResult<Vec<PartMesh>> {
     let mut evaluator = ferncad_core::evaluator::Evaluator::new();
+    for (name, src) in files {
+        evaluator
+            .module_loader_mut()
+            .add_user_module(name.clone(), src.clone());
+    }
     let result = evaluator.eval_source(source)?;
     let resolution = evaluator.resolution();
 
@@ -75,12 +96,13 @@ pub fn eval_and_realize_parts(source: &str) -> FernResult<Vec<PartMesh>> {
         ferncad_core::types::Value::Assembly(assembly) => {
             realize_assembly_with_resolution(&assembly, resolution)
         }
-        ferncad_core::types::Value::Shape(node) => {
-            let mesh = realize::realize_with_resolution(&node, resolution)?;
+        ferncad_core::types::Value::Shape(tracked) => {
+            let mesh = realize::realize_with_resolution(&tracked.node, resolution)?;
             Ok(vec![PartMesh {
                 name: "shape".to_string(),
                 mesh,
                 color: [0.53, 0.53, 0.80],
+                span: tracked.span.clone(),
             }])
         }
         _ => Err(FernError::CadError {
@@ -140,5 +162,32 @@ mod tests {
         "#;
         let parts = eval_and_realize_parts(source).unwrap();
         assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn test_single_shape_has_span() {
+        let source = "(box :width 10 :depth 10 :height 10)";
+        let parts = eval_and_realize_parts(source).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].span.start, 0);
+        assert_eq!(parts[0].span.end, source.len());
+    }
+
+    #[test]
+    fn test_assembly_parts_have_spans() {
+        let source = r#"(assembly "bracket"
+  (place :part (box :width 40 :depth 20 :height 5) :as :base)
+  (place :part (cylinder :radius 3 :height 15) :as :pin
+         :at #p(10 0 5)))"#;
+        let parts = eval_and_realize_parts(source).unwrap();
+        assert_eq!(parts.len(), 2);
+        // Each part should have a non-dummy span
+        for part in &parts {
+            assert!(
+                part.span.end > 0,
+                "part '{}' should have non-dummy span",
+                part.name
+            );
+        }
     }
 }

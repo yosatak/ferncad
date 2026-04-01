@@ -307,13 +307,16 @@ pub fn generate_extrude(profile: &[[f64; 2]], height: f64) -> TriMesh {
         vertices.push([p[0], p[1], hh]);
     }
 
-    // Bottom cap triangulation (fan from vertex 0, reversed winding)
-    for i in 1..n - 1 {
-        triangles.push([0, i + 1, i]);
+    // Ear-clipping triangulation for caps
+    let cap_tris = ear_clip_triangulate(profile);
+
+    // Bottom cap (reversed winding for downward-facing normal)
+    for [a, b, c] in &cap_tris {
+        triangles.push([*a, *c, *b]);
     }
-    // Top cap triangulation (fan from vertex n)
-    for i in 1..n - 1 {
-        triangles.push([n, n + i, n + i + 1]);
+    // Top cap (offset by n)
+    for [a, b, c] in &cap_tris {
+        triangles.push([n + *a, n + *b, n + *c]);
     }
 
     // Side faces (quad strip)
@@ -331,6 +334,117 @@ pub fn generate_extrude(profile: &[[f64; 2]], height: f64) -> TriMesh {
         vertices,
         triangles,
     }
+}
+
+/// Ear-clipping polygon triangulation for 2D polygons.
+///
+/// Handles concave polygons correctly (unlike fan triangulation).
+/// Returns a list of triangle index triples referencing the original polygon vertices.
+fn ear_clip_triangulate(polygon: &[[f64; 2]]) -> Vec<[usize; 3]> {
+    let n = polygon.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    if n == 3 {
+        return vec![[0, 1, 2]];
+    }
+
+    // Determine polygon winding (sign of total signed area)
+    let ccw = polygon_signed_area(polygon) > 0.0;
+
+    // Working list of vertex indices
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut result = Vec::with_capacity(n - 2);
+    let mut safety = n * n; // prevent infinite loops on degenerate polygons
+
+    while indices.len() > 3 && safety > 0 {
+        safety -= 1;
+        let len = indices.len();
+        let mut ear_found = false;
+
+        for i in 0..len {
+            let prev = indices[(i + len - 1) % len];
+            let curr = indices[i];
+            let next = indices[(i + 1) % len];
+
+            // Check if this vertex forms a convex angle (an "ear")
+            if !is_convex(polygon[prev], polygon[curr], polygon[next], ccw) {
+                continue;
+            }
+
+            // Check no other vertex is inside this triangle
+            let mut contains_other = false;
+            for &idx in &indices {
+                if idx == prev || idx == curr || idx == next {
+                    continue;
+                }
+                if point_in_triangle(polygon[idx], polygon[prev], polygon[curr], polygon[next]) {
+                    contains_other = true;
+                    break;
+                }
+            }
+
+            if !contains_other {
+                result.push([prev, curr, next]);
+                indices.remove(i);
+                ear_found = true;
+                break;
+            }
+        }
+
+        if !ear_found {
+            // Degenerate polygon — fall back to fan triangulation for remaining vertices
+            for i in 1..indices.len() - 1 {
+                result.push([indices[0], indices[i], indices[i + 1]]);
+            }
+            break;
+        }
+    }
+
+    // Last 3 vertices form the final triangle
+    if indices.len() == 3 {
+        result.push([indices[0], indices[1], indices[2]]);
+    }
+
+    result
+}
+
+/// Signed area of a 2D polygon (positive = counter-clockwise)
+fn polygon_signed_area(polygon: &[[f64; 2]]) -> f64 {
+    let n = polygon.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += polygon[i][0] * polygon[j][1];
+        area -= polygon[j][0] * polygon[i][1];
+    }
+    area * 0.5
+}
+
+/// Check if vertex `curr` is a convex angle for the given winding direction
+fn is_convex(prev: [f64; 2], curr: [f64; 2], next: [f64; 2], ccw: bool) -> bool {
+    let cross =
+        (curr[0] - prev[0]) * (next[1] - prev[1]) - (curr[1] - prev[1]) * (next[0] - prev[0]);
+    if ccw {
+        cross > 0.0
+    } else {
+        cross < 0.0
+    }
+}
+
+/// Check if point `p` lies inside triangle `(a, b, c)`
+fn point_in_triangle(p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
+    let d1 = sign(p, a, b);
+    let d2 = sign(p, b, c);
+    let d3 = sign(p, c, a);
+    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+    !(has_neg && has_pos)
+}
+
+/// Sign of cross product for point-in-triangle test
+fn sign(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]) -> f64 {
+    (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
 }
 
 /// Generate a mesh by revolving a 2D profile (in XZ plane) around Z axis
@@ -433,20 +547,6 @@ fn rotation_minimizing_normal(tangent: [f64; 3], prev_normal: [f64; 3]) -> [f64;
     vec3_normalize(projected)
 }
 
-/// Compute the radial frame for a helix at parameter t.
-///
-/// For helical paths, the profile must always point radially outward (not use RMF).
-/// Returns (normal, binormal) where normal points radially outward from the helix axis.
-fn helix_radial_frame(path: &PathNode, t: f64) -> ([f64; 3], [f64; 3]) {
-    let pos = path.position(t);
-    let tangent = vec3_normalize(path.tangent(t));
-    // Radial outward direction: project position onto XY plane and normalize
-    let radial = vec3_normalize([pos[0], pos[1], 0.0]);
-    // Binormal = tangent × radial (completes right-handed frame)
-    let binormal = vec3_cross(tangent, radial);
-    (radial, binormal)
-}
-
 /// Generate a mesh by sweeping a 2D profile along a 3D path
 ///
 /// For helix paths, uses an analytical radial frame so the profile always points
@@ -461,14 +561,23 @@ pub fn generate_sweep(profile: &[[f64; 2]], path: &PathNode, segments: u32) -> T
     let use_radial = matches!(path, PathNode::Helix { .. });
     let mut prev_normal = initial_normal(path);
 
+    // Pre-compute all positions and tangents to avoid redundant path evaluations
+    let ts: Vec<f64> = (0..=seg).map(|s| s as f64 / seg as f64).collect();
+    let positions: Vec<[f64; 3]> = ts.iter().map(|&t| path.position(t)).collect();
+    let tangents: Vec<[f64; 3]> = ts.iter().map(|&t| path.tangent(t)).collect();
+
     for s in 0..=seg {
-        let t = s as f64 / seg as f64;
-        let pos = path.position(t);
+        let pos = positions[s];
 
         let (normal, binormal) = if use_radial {
-            helix_radial_frame(path, t)
+            let tangent = vec3_normalize(tangents[s]);
+            // Radial outward direction: project position onto XY plane and normalize
+            let radial = vec3_normalize([pos[0], pos[1], 0.0]);
+            // Binormal = tangent × radial (completes right-handed frame)
+            let binormal = vec3_cross(tangent, radial);
+            (radial, binormal)
         } else {
-            let tangent = vec3_normalize(path.tangent(t));
+            let tangent = vec3_normalize(tangents[s]);
             let normal = rotation_minimizing_normal(tangent, prev_normal);
             let binormal = vec3_cross(tangent, normal);
             prev_normal = normal;
@@ -534,14 +643,11 @@ fn resample_profile(profile: &[[f64; 2]], target: usize) -> Vec<[f64; 2]> {
     let mut result = Vec::with_capacity(target);
     for j in 0..target {
         let target_len = total_length * j as f64 / target as f64;
-        // Find segment containing target_len
-        let mut seg_idx = 0;
-        for k in 0..n {
-            if cum_lengths[k + 1] >= target_len {
-                seg_idx = k;
-                break;
-            }
-        }
+        // Find segment containing target_len (binary search)
+        let seg_idx = cum_lengths
+            .partition_point(|&len| len < target_len)
+            .saturating_sub(1)
+            .min(n - 1);
         let seg_start = cum_lengths[seg_idx];
         let seg_end = cum_lengths[seg_idx + 1];
         let seg_len = seg_end - seg_start;
@@ -765,5 +871,39 @@ mod tests {
         let (min, max) = mesh.bounding_box();
         assert!((min[2] - 0.0).abs() < 0.01);
         assert!((max[2] - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resample_profile_correctness() {
+        // Square profile resampled to more points should stay on the square perimeter
+        let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let resampled = super::resample_profile(&square, 8);
+        assert_eq!(resampled.len(), 8);
+        // All points should lie on the edges of the square
+        for p in &resampled {
+            let on_edge = (p[0].abs() < 1e-10 || (p[0] - 10.0).abs() < 1e-10)
+                || (p[1].abs() < 1e-10 || (p[1] - 10.0).abs() < 1e-10);
+            assert!(on_edge, "point {:?} is not on square edge", p);
+        }
+    }
+
+    #[test]
+    fn test_sweep_pre_computed_positions() {
+        // Verify sweep with helix produces correct geometry
+        // (tests that pre-computed positions/tangents match the original per-step computation)
+        use ferncad_core::types::PathNode;
+        let profile = vec![[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]];
+        let path = PathNode::Helix {
+            radius: 5.0,
+            pitch: 10.0,
+            turns: 1.0,
+        };
+        let mesh = generate_sweep(&profile, &path, 16);
+        assert!(mesh.vertex_count() > 0);
+        assert!(mesh.triangle_count() > 0);
+        // Helix should span Z from 0 to pitch*turns = 10
+        let (min, max) = mesh.bounding_box();
+        assert!(min[2] >= -2.0, "min Z too low: {}", min[2]);
+        assert!(max[2] <= 12.0, "max Z too high: {}", max[2]);
     }
 }

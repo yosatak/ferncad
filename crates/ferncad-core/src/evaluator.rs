@@ -9,10 +9,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::env::Env;
-use crate::error::{FernError, FernResult, SourceLocation};
+use crate::error::{FernError, FernResult, SourceLocation, SourceSpan};
 use crate::types::{
-    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, PathNode, ShapeNode, Value,
-    DEFAULT_SEGMENTS,
+    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, PathNode, ShapeNode, TrackedShape,
+    Value, DEFAULT_SEGMENTS,
 };
 
 /// Evaluator
@@ -23,6 +23,10 @@ pub struct Evaluator {
     env_map: HashMap<usize, Rc<RefCell<Env>>>,
     /// Module loader
     module_loader: crate::module::ModuleLoader,
+    /// Current call span (byte range of the expression being evaluated)
+    current_call_span: SourceSpan,
+    /// Source code (for computing inner expression spans)
+    source: String,
 }
 
 impl Evaluator {
@@ -33,6 +37,8 @@ impl Evaluator {
             env: Rc::clone(&env),
             env_map: HashMap::new(),
             module_loader: crate::module::ModuleLoader::new(),
+            current_call_span: SourceSpan::dummy(),
+            source: String::new(),
         };
         evaluator.register_env(Rc::clone(&env));
         evaluator.register_builtins();
@@ -59,9 +65,11 @@ impl Evaluator {
 
     /// Evaluate source code
     pub fn eval_source(&mut self, source: &str) -> FernResult<Value> {
-        let exprs = crate::parser::parse(source)?;
+        self.source = source.to_string();
+        let spanned_exprs = crate::parser::parse_with_spans(source)?;
         let mut result = Value::Nil;
-        for expr in &exprs {
+        for (expr, span) in &spanned_exprs {
+            self.current_call_span = span.clone();
             result = self.eval(expr, &Rc::clone(&self.env))?;
         }
         Ok(result)
@@ -117,6 +125,17 @@ impl Evaluator {
                 "defmacro" => return self.eval_defmacro(items, env),
                 "progn" | "begin" => return self.eval_progn(items, env),
                 "cond" => return self.eval_cond(items, env),
+                "when" => return self.eval_when(items, env),
+                "unless" => return self.eval_unless(items, env),
+                "and" => return self.eval_and(items, env),
+                "or" => return self.eval_or(items, env),
+                "setf" => return self.eval_setf(items, env),
+                "dotimes" => return self.eval_dotimes(items, env),
+                "dolist" => return self.eval_dolist(items, env),
+                "mapcar" => return self.eval_mapcar(items, env),
+                "reduce" => return self.eval_reduce(items, env),
+                "remove-if" => return self.eval_remove_if(items, env),
+                "apply" => return self.eval_apply(items, env),
                 _ => {}
             }
         }
@@ -129,7 +148,16 @@ impl Evaluator {
             Value::BuiltinFn(def) => {
                 // Built-in function: evaluate arguments first
                 let evaluated_args = self.eval_args(args, env)?;
-                (def.func)(&evaluated_args, &loc)
+                let result = (def.func)(&evaluated_args, &loc)?;
+                // Attach source span to shape results for editor↔viewer highlighting
+                Ok(if let Value::Shape(tracked) = &result {
+                    Value::Shape(Arc::new(TrackedShape {
+                        node: Arc::clone(&tracked.node),
+                        span: self.current_call_span.clone(),
+                    }))
+                } else {
+                    result
+                })
             }
             Value::Lambda(lambda_def) => self.apply_lambda(&lambda_def, args, env),
             Value::PartDef(part_def) => self.apply_part(&part_def, args, env),
@@ -555,6 +583,364 @@ impl Evaluator {
         Ok(Value::Nil)
     }
 
+    /// Evaluate `(when condition body...)` — execute body when condition is truthy
+    fn eval_when(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        if items.len() < 3 {
+            return Err(FernError::EvalError {
+                loc: SourceLocation { line: 0, col: 0 },
+                message: "`when` requires (when condition body...) form".to_string(),
+            });
+        }
+        let test = self.eval(&items[1], env)?;
+        if test.is_truthy() {
+            let mut result = Value::Nil;
+            for expr in &items[2..] {
+                result = self.eval(expr, env)?;
+            }
+            Ok(result)
+        } else {
+            Ok(Value::Nil)
+        }
+    }
+
+    /// Evaluate `(unless condition body...)` — execute body when condition is falsy
+    fn eval_unless(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        if items.len() < 3 {
+            return Err(FernError::EvalError {
+                loc: SourceLocation { line: 0, col: 0 },
+                message: "`unless` requires (unless condition body...) form".to_string(),
+            });
+        }
+        let test = self.eval(&items[1], env)?;
+        if !test.is_truthy() {
+            let mut result = Value::Nil;
+            for expr in &items[2..] {
+                result = self.eval(expr, env)?;
+            }
+            Ok(result)
+        } else {
+            Ok(Value::Nil)
+        }
+    }
+
+    /// Evaluate `(and expr...)` — short-circuit; returns last truthy value or nil
+    fn eval_and(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let mut result = Value::Bool(true);
+        for expr in &items[1..] {
+            result = self.eval(expr, env)?;
+            if !result.is_truthy() {
+                return Ok(Value::Nil);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Evaluate `(or expr...)` — short-circuit; returns first truthy value or nil
+    fn eval_or(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        for expr in &items[1..] {
+            let result = self.eval(expr, env)?;
+            if result.is_truthy() {
+                return Ok(result);
+            }
+        }
+        Ok(Value::Nil)
+    }
+
+    /// Evaluate `(setf name value)` — mutate an existing variable
+    fn eval_setf(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`setf` requires (setf name value) form".to_string(),
+            });
+        }
+        let name = match &items[1] {
+            Value::Symbol(s) => s.clone(),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`setf` first argument must be a symbol".to_string(),
+                });
+            }
+        };
+        let value = self.eval(&items[2], env)?;
+        if !env.borrow_mut().set(&name, value.clone()) {
+            return Err(FernError::UndefinedVariable { loc, name });
+        }
+        Ok(value)
+    }
+
+    /// Evaluate `(dotimes (var count) body...)` — loop var from 0 to count-1
+    fn eval_dotimes(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`dotimes` requires (dotimes (var count) body...) form".to_string(),
+            });
+        }
+        let binding = match &items[1] {
+            Value::List(b) if b.len() >= 2 => b,
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`dotimes` first argument must be (var count) form".to_string(),
+                });
+            }
+        };
+        let var_name = match &binding[0] {
+            Value::Symbol(s) => s.clone(),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`dotimes` variable must be a symbol".to_string(),
+                });
+            }
+        };
+
+        let count_val = self.eval(&binding[1], env)?;
+        let count = count_val.as_number().ok_or_else(|| FernError::TypeError {
+            loc: loc.clone(),
+            expected: "number".to_string(),
+            actual: count_val.type_name().to_string(),
+        })? as i64;
+
+        let child_env = Env::new_child(Rc::clone(env));
+        self.register_env(Rc::clone(&child_env));
+        child_env
+            .borrow_mut()
+            .define(var_name.clone(), Value::Int(0));
+
+        let mut result = Value::Nil;
+        for i in 0..count {
+            child_env.borrow_mut().set(&var_name, Value::Int(i));
+            for expr in &items[2..] {
+                result = self.eval(expr, &child_env)?;
+            }
+        }
+        Ok(result)
+    }
+
+    /// Evaluate `(dolist (var list-expr) body...)` — iterate over a list
+    fn eval_dolist(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`dolist` requires (dolist (var list) body...) form".to_string(),
+            });
+        }
+        let binding = match &items[1] {
+            Value::List(b) if b.len() >= 2 => b,
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`dolist` first argument must be (var list) form".to_string(),
+                });
+            }
+        };
+        let var_name = match &binding[0] {
+            Value::Symbol(s) => s.clone(),
+            _ => {
+                return Err(FernError::EvalError {
+                    loc,
+                    message: "`dolist` variable must be a symbol".to_string(),
+                });
+            }
+        };
+
+        let list_val = self.eval(&binding[1], env)?;
+        let items_list = match &list_val {
+            Value::List(l) => l,
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+
+        let child_env = Env::new_child(Rc::clone(env));
+        self.register_env(Rc::clone(&child_env));
+        child_env.borrow_mut().define(var_name.clone(), Value::Nil);
+
+        let mut result = Value::Nil;
+        for item in items_list {
+            child_env.borrow_mut().set(&var_name, item.clone());
+            for expr in &items[2..] {
+                result = self.eval(expr, &child_env)?;
+            }
+        }
+        Ok(result)
+    }
+
+    /// Evaluate `(mapcar fn list)` — apply function to each element, collect results
+    fn eval_mapcar(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`mapcar` requires (mapcar function list) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let list_val = self.eval(&items[2], env)?;
+        let list = match &list_val {
+            Value::List(l) => l,
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+
+        let mut results = Vec::with_capacity(list.len());
+        for item in list {
+            let result = self.apply_callable(&func, &[item.clone()], env)?;
+            results.push(result);
+        }
+        Ok(Value::List(results))
+    }
+
+    /// Evaluate `(reduce fn list initial)` — fold over list elements
+    fn eval_reduce(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() < 3 || items.len() > 4 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`reduce` requires (reduce function list [initial]) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let list_val = self.eval(&items[2], env)?;
+        let list = match &list_val {
+            Value::List(l) => l,
+            _ => {
+                return Err(FernError::TypeError {
+                    loc: loc.clone(),
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+
+        let (mut acc, start) = if items.len() == 4 {
+            (self.eval(&items[3], env)?, 0)
+        } else if !list.is_empty() {
+            (list[0].clone(), 1)
+        } else {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`reduce` requires a non-empty list or an initial value".to_string(),
+            });
+        };
+
+        for item in &list[start..] {
+            acc = self.apply_callable(&func, &[acc, item.clone()], env)?;
+        }
+        Ok(acc)
+    }
+
+    /// Evaluate `(remove-if fn list)` — remove elements where predicate returns truthy
+    fn eval_remove_if(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`remove-if` requires (remove-if predicate list) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let list_val = self.eval(&items[2], env)?;
+        let list = match &list_val {
+            Value::List(l) => l,
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+
+        let mut results = Vec::new();
+        for item in list {
+            let test = self.apply_callable(&func, &[item.clone()], env)?;
+            if !test.is_truthy() {
+                results.push(item.clone());
+            }
+        }
+        Ok(Value::List(results))
+    }
+
+    /// Evaluate `(apply fn args-list)` — apply function to a list of arguments
+    fn eval_apply(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`apply` requires (apply function args-list) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let args_val = self.eval(&items[2], env)?;
+        let args = match &args_val {
+            Value::List(l) => l.clone(),
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: args_val.type_name().to_string(),
+                });
+            }
+        };
+        self.apply_callable(&func, &args, env)
+    }
+
+    /// Apply a callable value (Lambda, BuiltinFn, or PartDef) to pre-evaluated arguments
+    fn apply_callable(
+        &mut self,
+        func: &Value,
+        args: &[Value],
+        _env: &Rc<RefCell<Env>>,
+    ) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        match func {
+            Value::BuiltinFn(def) => (def.func)(args, &loc),
+            Value::Lambda(lambda_def) => {
+                let closure_env = self
+                    .env_map
+                    .get(&lambda_def.env_id)
+                    .ok_or_else(|| FernError::EvalError {
+                        loc: loc.clone(),
+                        message: "closure environment not found".to_string(),
+                    })?
+                    .clone();
+                let func_env = Env::new_child(closure_env);
+                self.register_env(Rc::clone(&func_env));
+
+                for (i, param) in lambda_def.params.iter().enumerate() {
+                    let value = args.get(i).cloned().unwrap_or(Value::Nil);
+                    func_env.borrow_mut().define(param.clone(), value);
+                }
+
+                let mut result = Value::Nil;
+                for expr in &lambda_def.body {
+                    result = self.eval(expr, &func_env)?;
+                }
+                Ok(result)
+            }
+            _ => Err(FernError::EvalError {
+                loc,
+                message: format!("`{}` is not callable", func.type_name()),
+            }),
+        }
+    }
+
     /// Evaluate `(defpart name "doc" :meta (...) :params (...) :body expr)`
     fn eval_defpart(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
@@ -819,13 +1205,15 @@ impl Evaluator {
 
     /// Evaluate `(require :module-name)`
     ///
-    /// Searches for a module in the embedded standard library and evaluates it in the current environment.
+    /// Searches for a module in user modules first, then the embedded standard library,
+    /// and evaluates it in the current environment.
     fn eval_require(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 2 {
             return Err(FernError::EvalError {
                 loc,
-                message: "`require` requires (require :module-name) form".to_string(),
+                message: "`require` requires (require :module-name) or (require \"name\") form"
+                    .to_string(),
             });
         }
 
@@ -845,19 +1233,20 @@ impl Evaluator {
             return Ok(Value::Nil);
         }
 
-        // Search for embedded module
-        let source = crate::module::ModuleLoader::find_builtin(&module_name).ok_or_else(|| {
-            FernError::EvalError {
+        // Search user modules first, then builtins
+        let source = self
+            .module_loader
+            .find_module(&module_name)
+            .ok_or_else(|| FernError::EvalError {
                 loc: loc.clone(),
                 message: format!(
                     "module `{module_name}` not found. Available modules: {:?}",
-                    crate::module::ModuleLoader::available_modules()
+                    self.module_loader.available_modules_all()
                 ),
-            }
-        })?;
+            })?;
 
-        // Evaluate the module
-        let exprs = crate::parser::parse(source)?;
+        // Evaluate the module (source is an owned String, no borrow conflict)
+        let exprs = crate::parser::parse(&source)?;
         for expr in &exprs {
             self.eval(expr, env)?;
         }
@@ -866,7 +1255,119 @@ impl Evaluator {
         Ok(Value::Nil)
     }
 
+    /// Get a mutable reference to the module loader
+    pub fn module_loader_mut(&mut self) -> &mut crate::module::ModuleLoader {
+        &mut self.module_loader
+    }
+
     /// Evaluate `(assembly "name" "doc" (place ...) (place ...) (mate ...) ...)`
+    /// Find spans of top-level S-expressions within a byte range of the source.
+    ///
+    /// Scans for balanced parenthesis groups, skipping strings and comments.
+    /// Returns spans relative to the full source (absolute byte offsets).
+    fn find_inner_expr_spans(source: &str, start: usize, end: usize) -> Vec<SourceSpan> {
+        let mut spans = Vec::new();
+        let bytes = source.as_bytes();
+        let mut i = start;
+        // Skip the outer opening paren
+        if i < end && bytes[i] == b'(' {
+            i += 1;
+        }
+        // Skip until we reach the closing paren of the outer list
+        let outer_end = end.min(source.len());
+
+        while i < outer_end {
+            let ch = bytes[i];
+            match ch {
+                b' ' | b'\t' | b'\n' | b'\r' => {
+                    i += 1;
+                }
+                b';' => {
+                    // Skip line comment
+                    while i < outer_end && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                b'"' => {
+                    // String literal — record as atom span
+                    let expr_start = i;
+                    i += 1; // skip opening quote
+                    while i < outer_end {
+                        if bytes[i] == b'\\' {
+                            i += 2; // skip escape sequence
+                        } else if bytes[i] == b'"' {
+                            i += 1;
+                            break;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    spans.push(SourceSpan {
+                        start: expr_start,
+                        end: i,
+                    });
+                }
+                b'(' => {
+                    // Balanced parenthesis group
+                    let expr_start = i;
+                    let mut depth = 1;
+                    i += 1;
+                    while i < outer_end && depth > 0 {
+                        match bytes[i] {
+                            b'(' => depth += 1,
+                            b')' => depth -= 1,
+                            b'"' => {
+                                i += 1;
+                                while i < outer_end {
+                                    if bytes[i] == b'\\' {
+                                        i += 1;
+                                    } else if bytes[i] == b'"' {
+                                        break;
+                                    }
+                                    i += 1;
+                                }
+                            }
+                            b';' => {
+                                while i < outer_end && bytes[i] != b'\n' {
+                                    i += 1;
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    spans.push(SourceSpan {
+                        start: expr_start,
+                        end: i,
+                    });
+                }
+                b')' => {
+                    // Outer closing paren — stop
+                    break;
+                }
+                _ => {
+                    // Atom (symbol, number, keyword, etc.)
+                    let expr_start = i;
+                    while i < outer_end
+                        && !matches!(
+                            bytes[i],
+                            b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')' | b';' | b'"'
+                        )
+                    {
+                        i += 1;
+                    }
+                    spans.push(SourceSpan {
+                        start: expr_start,
+                        end: i,
+                    });
+                }
+            }
+        }
+
+        spans
+    }
+
     fn eval_assembly(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
         if items.len() < 2 {
@@ -900,8 +1401,21 @@ impl Evaluator {
         let mut parts = Vec::new();
         let mut constraints = Vec::new();
 
+        // Compute per-expression spans within the assembly body
+        let assembly_span = self.current_call_span.clone();
+        let inner_spans =
+            Self::find_inner_expr_spans(&self.source, assembly_span.start, assembly_span.end);
+        // inner_spans: [assembly_keyword, name, docstring?, body_expr_0, body_expr_1, ...]
+        // items[0] = assembly keyword, items[1] = name, items[body_start..] = body
+
         // Evaluate each expression in the body
-        for expr in &items[body_start..] {
+        for (i, expr) in items[body_start..].iter().enumerate() {
+            // Set span for this specific body expression
+            // inner_spans indices match items indices (both start after the outer paren)
+            let span_idx = body_start + i;
+            if let Some(span) = inner_spans.get(span_idx) {
+                self.current_call_span = span.clone();
+            }
             let result = self.eval(expr, &asm_env)?;
 
             // Collect place results as parts
@@ -920,6 +1434,9 @@ impl Evaluator {
                 constraints.push(constraint);
             }
         }
+
+        // Restore assembly-level span
+        self.current_call_span = assembly_span;
 
         // Auto-assign colors
         for (i, part) in parts.iter_mut().enumerate() {
@@ -1192,11 +1709,39 @@ impl Evaluator {
 
         // List
         self.register_builtin("list", builtin_list);
+        self.register_builtin("cons", builtin_cons);
+        self.register_builtin("car", builtin_car);
+        self.register_builtin("cdr", builtin_cdr);
+        self.register_builtin("append", builtin_append);
+        self.register_builtin("nth", builtin_nth);
+        self.register_builtin("length", builtin_length);
+        self.register_builtin("reverse", builtin_reverse);
+        self.register_builtin("last", builtin_last);
 
         // Math
         self.register_builtin("cos", builtin_cos);
         self.register_builtin("sin", builtin_sin);
+        self.register_builtin("tan", builtin_tan);
+        self.register_builtin("acos", builtin_acos);
+        self.register_builtin("atan", builtin_atan);
+        self.register_builtin("atan2", builtin_atan2);
         self.register_builtin("sqrt", builtin_sqrt);
+        self.register_builtin("abs", builtin_abs);
+        self.register_builtin("mod", builtin_mod);
+        self.register_builtin("expt", builtin_expt);
+        self.register_builtin("floor", builtin_floor);
+        self.register_builtin("ceil", builtin_ceil);
+        self.register_builtin("min", builtin_min);
+        self.register_builtin("max", builtin_max);
+
+        // Type predicates
+        self.register_builtin("numberp", builtin_numberp);
+        self.register_builtin("listp", builtin_listp);
+        self.register_builtin("nilp", builtin_nilp);
+        self.register_builtin("stringp", builtin_stringp);
+
+        // String
+        self.register_builtin("format", builtin_format);
 
         // Constants
         self.env
@@ -1286,6 +1831,11 @@ impl Evaluator {
     /// Get a reference to the global environment
     pub fn global_env(&self) -> &Rc<RefCell<Env>> {
         &self.env
+    }
+
+    /// Set the current call span (used by completion for partial evaluation)
+    pub fn set_call_span(&mut self, span: SourceSpan) {
+        self.current_call_span = span;
     }
 }
 
@@ -1378,10 +1928,10 @@ fn require_kwarg_f64(
     })
 }
 
-/// Get an argument as a Shape
+/// Get an argument as a ShapeNode (extracts from TrackedShape)
 fn get_shape_arg(value: &Value, loc: &SourceLocation) -> FernResult<Arc<ShapeNode>> {
     match value {
-        Value::Shape(s) => Ok(Arc::clone(s)),
+        Value::Shape(s) => Ok(Arc::clone(&s.node)),
         _ => Err(FernError::TypeError {
             loc: loc.clone(),
             expected: "shape".to_string(),
@@ -1588,6 +2138,451 @@ fn builtin_sqrt(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     Ok(Value::Float(v.sqrt()))
 }
 
+/// Helper: extract a single numeric argument from args
+fn require_single_number(args: &[Value], name: &str, loc: &SourceLocation) -> FernResult<f64> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: format!("`{name}` requires exactly one argument"),
+        });
+    }
+    args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
+    })
+}
+
+/// Helper: extract two numeric arguments from args
+fn require_two_numbers(args: &[Value], name: &str, loc: &SourceLocation) -> FernResult<(f64, f64)> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: format!("`{name}` requires exactly two arguments"),
+        });
+    }
+    let a = args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
+    })?;
+    let b = args[1].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[1].type_name().to_string(),
+    })?;
+    Ok((a, b))
+}
+
+/// `(tan x)` — tangent
+fn builtin_tan(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "tan", loc)?;
+    Ok(Value::Float(v.tan()))
+}
+
+/// `(acos x)` — arc cosine
+fn builtin_acos(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "acos", loc)?;
+    Ok(Value::Float(v.acos()))
+}
+
+/// `(atan x)` — arc tangent (single argument)
+fn builtin_atan(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "atan", loc)?;
+    Ok(Value::Float(v.atan()))
+}
+
+/// `(atan2 y x)` — two-argument arc tangent
+fn builtin_atan2(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (y, x) = require_two_numbers(args, "atan2", loc)?;
+    Ok(Value::Float(y.atan2(x)))
+}
+
+/// `(abs x)` — absolute value
+fn builtin_abs(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "abs", loc)?;
+    Ok(Value::Float(v.abs()))
+}
+
+/// `(mod a b)` — modulo (remainder)
+fn builtin_mod(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (a, b) = require_two_numbers(args, "mod", loc)?;
+    if b == 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "division by zero in `mod`".to_string(),
+        });
+    }
+    Ok(Value::Float(a % b))
+}
+
+/// `(expt base power)` — exponentiation
+fn builtin_expt(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let (base, power) = require_two_numbers(args, "expt", loc)?;
+    Ok(Value::Float(base.powf(power)))
+}
+
+/// `(floor x)` — round down
+fn builtin_floor(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "floor", loc)?;
+    Ok(Value::Float(v.floor()))
+}
+
+/// `(ceil x)` — round up
+fn builtin_ceil(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "ceil", loc)?;
+    Ok(Value::Float(v.ceil()))
+}
+
+/// `(min a b ...)` — minimum value
+fn builtin_min(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.is_empty() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`min` requires at least one argument".to_string(),
+        });
+    }
+    let mut result = args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
+    })?;
+    for arg in &args[1..] {
+        let v = arg.as_number().ok_or_else(|| FernError::TypeError {
+            loc: loc.clone(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
+        })?;
+        if v < result {
+            result = v;
+        }
+    }
+    Ok(Value::Float(result))
+}
+
+/// `(max a b ...)` — maximum value
+fn builtin_max(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.is_empty() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`max` requires at least one argument".to_string(),
+        });
+    }
+    let mut result = args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
+    })?;
+    for arg in &args[1..] {
+        let v = arg.as_number().ok_or_else(|| FernError::TypeError {
+            loc: loc.clone(),
+            expected: "number".to_string(),
+            actual: arg.type_name().to_string(),
+        })?;
+        if v > result {
+            result = v;
+        }
+    }
+    Ok(Value::Float(result))
+}
+
+// === List built-in functions ===
+
+/// `(cons item list)` — prepend item to list
+fn builtin_cons(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`cons` requires exactly two arguments".to_string(),
+        });
+    }
+    let mut result = match &args[1] {
+        Value::List(l) => l.clone(),
+        Value::Nil => Vec::new(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "list".to_string(),
+                actual: args[1].type_name().to_string(),
+            });
+        }
+    };
+    result.insert(0, args[0].clone());
+    Ok(Value::List(result))
+}
+
+/// `(car list)` — first element
+fn builtin_car(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`car` requires exactly one argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::List(l) if !l.is_empty() => Ok(l[0].clone()),
+        Value::List(_) | Value::Nil => Ok(Value::Nil),
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list".to_string(),
+            actual: args[0].type_name().to_string(),
+        }),
+    }
+}
+
+/// `(cdr list)` — tail (all but first)
+fn builtin_cdr(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`cdr` requires exactly one argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::List(l) if l.len() > 1 => Ok(Value::List(l[1..].to_vec())),
+        Value::List(_) | Value::Nil => Ok(Value::Nil),
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list".to_string(),
+            actual: args[0].type_name().to_string(),
+        }),
+    }
+}
+
+/// `(append list1 list2 ...)` — concatenate lists
+fn builtin_append(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let mut result = Vec::new();
+    for arg in args {
+        match arg {
+            Value::List(l) => result.extend(l.iter().cloned()),
+            Value::Nil => {}
+            _ => {
+                return Err(FernError::TypeError {
+                    loc: loc.clone(),
+                    expected: "list".to_string(),
+                    actual: arg.type_name().to_string(),
+                });
+            }
+        }
+    }
+    Ok(Value::List(result))
+}
+
+/// `(nth n list)` — element at index n (0-based)
+fn builtin_nth(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`nth` requires exactly two arguments (index list)".to_string(),
+        });
+    }
+    let index = args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "number".to_string(),
+        actual: args[0].type_name().to_string(),
+    })? as usize;
+    match &args[1] {
+        Value::List(l) => Ok(l.get(index).cloned().unwrap_or(Value::Nil)),
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list".to_string(),
+            actual: args[1].type_name().to_string(),
+        }),
+    }
+}
+
+/// `(length list)` — number of elements
+fn builtin_length(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`length` requires exactly one argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::List(l) => Ok(Value::Int(l.len() as i64)),
+        Value::Str(s) => Ok(Value::Int(s.len() as i64)),
+        Value::Nil => Ok(Value::Int(0)),
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list or string".to_string(),
+            actual: args[0].type_name().to_string(),
+        }),
+    }
+}
+
+/// `(reverse list)` — reversed list
+fn builtin_reverse(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`reverse` requires exactly one argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::List(l) => {
+            let mut reversed = l.clone();
+            reversed.reverse();
+            Ok(Value::List(reversed))
+        }
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list".to_string(),
+            actual: args[0].type_name().to_string(),
+        }),
+    }
+}
+
+/// `(last list)` — last element
+fn builtin_last(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`last` requires exactly one argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::List(l) => Ok(l.last().cloned().unwrap_or(Value::Nil)),
+        Value::Nil => Ok(Value::Nil),
+        _ => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "list".to_string(),
+            actual: args[0].type_name().to_string(),
+        }),
+    }
+}
+
+// === Type predicates ===
+
+/// `(numberp x)` — is x a number?
+fn builtin_numberp(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`numberp` requires exactly one argument".to_string(),
+        });
+    }
+    Ok(Value::Bool(args[0].as_number().is_some()))
+}
+
+/// `(listp x)` — is x a list?
+fn builtin_listp(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`listp` requires exactly one argument".to_string(),
+        });
+    }
+    Ok(Value::Bool(matches!(args[0], Value::List(_))))
+}
+
+/// `(nilp x)` — is x nil?
+fn builtin_nilp(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`nilp` requires exactly one argument".to_string(),
+        });
+    }
+    Ok(Value::Bool(matches!(
+        args[0],
+        Value::Nil | Value::Bool(false)
+    )))
+}
+
+/// `(stringp x)` — is x a string?
+fn builtin_stringp(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`stringp` requires exactly one argument".to_string(),
+        });
+    }
+    Ok(Value::Bool(matches!(args[0], Value::Str(_))))
+}
+
+// === String functions ===
+
+/// `(format template args...)` — simple string formatting with ~a placeholders
+fn builtin_format(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.is_empty() {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`format` requires at least a template string".to_string(),
+        });
+    }
+    let template = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+            });
+        }
+    };
+
+    let mut result = String::new();
+    let mut arg_idx = 1;
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '~' {
+            if let Some(&directive) = chars.peek() {
+                match directive {
+                    'a' | 'A' => {
+                        chars.next();
+                        if arg_idx < args.len() {
+                            match &args[arg_idx] {
+                                Value::Str(s) => result.push_str(s),
+                                other => result.push_str(&format!("{other}")),
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    'd' | 'D' => {
+                        chars.next();
+                        if arg_idx < args.len() {
+                            if let Some(n) = args[arg_idx].as_number() {
+                                result.push_str(&format!("{}", n as i64));
+                            } else {
+                                result.push_str(&format!("{}", args[arg_idx]));
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    'f' | 'F' => {
+                        chars.next();
+                        if arg_idx < args.len() {
+                            if let Some(n) = args[arg_idx].as_number() {
+                                result.push_str(&format!("{n}"));
+                            } else {
+                                result.push_str(&format!("{}", args[arg_idx]));
+                            }
+                            arg_idx += 1;
+                        }
+                    }
+                    '~' => {
+                        chars.next();
+                        result.push('~');
+                    }
+                    '%' => {
+                        chars.next();
+                        result.push('\n');
+                    }
+                    _ => {
+                        result.push(c);
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    Ok(Value::Str(result))
+}
+
 fn builtin_print(args: &[Value], _loc: &SourceLocation) -> FernResult<Value> {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
@@ -1621,11 +2616,13 @@ fn builtin_box(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let width = require_kwarg_f64(&kwargs, "width", "box", loc)?;
     let depth = require_kwarg_f64(&kwargs, "depth", "box", loc)?;
     let height = require_kwarg_f64(&kwargs, "height", "box", loc)?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Box {
-        width,
-        depth,
-        height,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Box {
+            width,
+            depth,
+            height,
+        },
+    ))))
 }
 
 fn builtin_cube(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1640,11 +2637,13 @@ fn builtin_cube(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         expected: "number".to_string(),
         actual: args[0].type_name().to_string(),
     })?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Box {
-        width: size,
-        depth: size,
-        height: size,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Box {
+            width: size,
+            depth: size,
+            height: size,
+        },
+    ))))
 }
 
 fn builtin_sphere(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1653,10 +2652,9 @@ fn builtin_sphere(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let segments = get_kwarg_f64(&kwargs, "segments", loc)?
         .map(|s| s as u32)
         .unwrap_or(DEFAULT_SEGMENTS);
-    Ok(Value::Shape(Arc::new(ShapeNode::Sphere {
-        radius,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Sphere { radius, segments },
+    ))))
 }
 
 fn builtin_cylinder(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1666,11 +2664,13 @@ fn builtin_cylinder(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let segments = get_kwarg_f64(&kwargs, "segments", loc)?
         .map(|s| s as u32)
         .unwrap_or(DEFAULT_SEGMENTS);
-    Ok(Value::Shape(Arc::new(ShapeNode::Cylinder {
-        radius,
-        height,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Cylinder {
+            radius,
+            height,
+            segments,
+        },
+    ))))
 }
 
 fn builtin_cone(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1681,12 +2681,14 @@ fn builtin_cone(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let segments = get_kwarg_f64(&kwargs, "segments", loc)?
         .map(|s| s as u32)
         .unwrap_or(DEFAULT_SEGMENTS);
-    Ok(Value::Shape(Arc::new(ShapeNode::Cone {
-        radius_bottom,
-        radius_top,
-        height,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Cone {
+            radius_bottom,
+            radius_top,
+            height,
+            segments,
+        },
+    ))))
 }
 
 fn builtin_prism(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1694,11 +2696,13 @@ fn builtin_prism(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let sides = require_kwarg_f64(&kwargs, "sides", "prism", loc)? as u32;
     let radius = require_kwarg_f64(&kwargs, "radius", "prism", loc)?;
     let height = require_kwarg_f64(&kwargs, "height", "prism", loc)?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Prism {
-        sides,
-        radius,
-        height,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Prism {
+            sides,
+            radius,
+            height,
+        },
+    ))))
 }
 
 fn builtin_torus(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1708,11 +2712,13 @@ fn builtin_torus(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
     let segments = get_kwarg_f64(&kwargs, "segments", loc)?
         .map(|s| s as u32)
         .unwrap_or(DEFAULT_SEGMENTS);
-    Ok(Value::Shape(Arc::new(ShapeNode::Torus {
-        radius_major,
-        radius_minor,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Torus {
+            radius_major,
+            radius_minor,
+            segments,
+        },
+    ))))
 }
 
 fn builtin_union(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1720,7 +2726,9 @@ fn builtin_union(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         .iter()
         .map(|a| get_shape_arg(a, loc))
         .collect::<FernResult<Vec<_>>>()?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Union { children })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Union { children },
+    ))))
 }
 
 fn builtin_difference(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1735,10 +2743,9 @@ fn builtin_difference(args: &[Value], loc: &SourceLocation) -> FernResult<Value>
         .iter()
         .map(|a| get_shape_arg(a, loc))
         .collect::<FernResult<Vec<_>>>()?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Difference {
-        base,
-        cutters,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Difference { base, cutters },
+    ))))
 }
 
 fn builtin_intersection(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1746,7 +2753,9 @@ fn builtin_intersection(args: &[Value], loc: &SourceLocation) -> FernResult<Valu
         .iter()
         .map(|a| get_shape_arg(a, loc))
         .collect::<FernResult<Vec<_>>>()?;
-    Ok(Value::Shape(Arc::new(ShapeNode::Intersection { children })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Intersection { children },
+    ))))
 }
 
 fn builtin_translate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1781,10 +2790,9 @@ fn builtin_translate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> 
             }),
         })?;
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Translate {
-        shape,
-        offset,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Translate { shape, offset },
+    ))))
 }
 
 fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1834,11 +2842,13 @@ fn builtin_rotate(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         }
     };
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Rotate {
-        shape,
-        axis,
-        angle_rad,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Rotate {
+            shape,
+            axis,
+            angle_rad,
+        },
+    ))))
 }
 
 fn builtin_scale(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -1866,7 +2876,9 @@ fn builtin_scale(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         [x, y, z]
     };
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Scale { shape, factors })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Scale { shape, factors },
+    ))))
 }
 
 fn builtin_to_mm(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
@@ -2158,10 +3170,12 @@ fn builtin_extrude(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
 
     let points = extract_polygon_points(profile, loc)?;
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Extrude {
-        profile: points,
-        height,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Extrude {
+            profile: points,
+            height,
+        },
+    ))))
 }
 
 /// `(revolve :profile polygon :angle angle)` — revolve a 2D polygon around Z
@@ -2175,11 +3189,13 @@ fn builtin_revolve(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
 
     let points = extract_polygon_points(profile, loc)?;
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Revolve {
-        profile: points,
-        angle_rad: angle,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Revolve {
+            profile: points,
+            angle_rad: angle,
+            segments,
+        },
+    ))))
 }
 
 /// Extract 2D points from a polygon Value::List
@@ -2385,11 +3401,13 @@ fn builtin_sweep(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         }
     };
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Sweep {
-        profile: points,
-        path,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Sweep {
+            profile: points,
+            path,
+            segments,
+        },
+    ))))
 }
 
 /// `(loft :profiles (p1 p2 ...) :at (z1 z2 ...) :segments s)` — loft between profiles
@@ -2453,11 +3471,13 @@ fn builtin_loft(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         });
     }
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Loft {
-        profiles,
-        positions,
-        segments,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Loft {
+            profiles,
+            positions,
+            segments,
+        },
+    ))))
 }
 
 /// Get a required keyword argument (any type)
@@ -2487,10 +3507,9 @@ fn builtin_chamfer(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         .and_then(|v| get_shape_arg(v, loc))?;
     let distance = require_kwarg_f64(&kwargs, "distance", "chamfer", loc)?;
 
-    Ok(Value::Shape(Arc::new(ShapeNode::Chamfer {
-        shape,
-        distance,
-    })))
+    Ok(Value::Shape(Arc::new(TrackedShape::untracked(
+        ShapeNode::Chamfer { shape, distance },
+    ))))
 }
 
 /// `(fillet ...)` — not yet supported
@@ -2647,9 +3666,9 @@ mod tests {
     fn test_box_shape() {
         let result = eval("(box :width 10 :depth 20 :height 30)");
         match result {
-            Value::Shape(node) => {
+            Value::Shape(tracked) => {
                 assert_eq!(
-                    *node,
+                    *tracked.node,
                     ShapeNode::Box {
                         width: 10.0,
                         depth: 20.0,
@@ -2665,7 +3684,7 @@ mod tests {
     fn test_sphere_shape() {
         let result = eval("(sphere :radius 5.0)");
         match result {
-            Value::Shape(node) => match &*node {
+            Value::Shape(tracked) => match &*tracked.node {
                 ShapeNode::Sphere { radius, .. } => {
                     assert!((radius - 5.0).abs() < 1e-10);
                 }
@@ -2691,7 +3710,7 @@ mod tests {
     fn test_translate() {
         let result = eval("(translate :shape (box :width 10 :depth 10 :height 10) :by #v(5 0 0))");
         match result {
-            Value::Shape(node) => match &*node {
+            Value::Shape(tracked) => match &*tracked.node {
                 ShapeNode::Translate { offset, .. } => {
                     assert_eq!(*offset, [5.0, 0.0, 0.0]);
                 }
@@ -2710,9 +3729,9 @@ mod tests {
             "#,
         );
         match result {
-            Value::Shape(node) => {
+            Value::Shape(tracked) => {
                 assert_eq!(
-                    *node,
+                    *tracked.node,
                     ShapeNode::Box {
                         width: 10.0,
                         depth: 10.0,
@@ -2739,9 +3758,9 @@ mod tests {
             "#,
         );
         match result {
-            Value::Shape(node) => {
+            Value::Shape(tracked) => {
                 assert_eq!(
-                    *node,
+                    *tracked.node,
                     ShapeNode::Box {
                         width: 20.0,
                         depth: 20.0,
@@ -2767,9 +3786,9 @@ mod tests {
             "#,
         );
         match result {
-            Value::Shape(node) => {
+            Value::Shape(tracked) => {
                 assert_eq!(
-                    *node,
+                    *tracked.node,
                     ShapeNode::Box {
                         width: 10.0,
                         depth: 10.0,
@@ -2799,7 +3818,7 @@ mod tests {
             "#,
         );
         match result {
-            Value::Shape(node) => match &*node {
+            Value::Shape(tracked) => match &*tracked.node {
                 ShapeNode::Difference { base, cutters } => {
                     assert_eq!(
                         **base,
@@ -3012,6 +4031,34 @@ mod tests {
     }
 
     #[test]
+    fn test_require_spur_gear() {
+        let result = eval(
+            r#"
+            (require :ferncad-std/spur-gear)
+            (spur-gear :module 2 :teeth 20 :face-width 10)
+            "#,
+        );
+        assert!(
+            matches!(result, Value::Shape(_)),
+            "spur-gear should return Shape: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_require_bevel_gear() {
+        let result = eval(
+            r#"
+            (require :ferncad-std/bevel-gear)
+            (bevel-gear :module 2 :teeth 20 :face-width 10)
+            "#,
+        );
+        assert!(
+            matches!(result, Value::Shape(_)),
+            "bevel-gear should return Shape: {result:?}"
+        );
+    }
+
+    #[test]
     fn test_require_unknown_module() {
         let err = eval_err("(require :nonexistent-module)");
         match err {
@@ -3205,5 +4252,438 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("path"), "error should mention 'path': {err}");
+    }
+
+    #[test]
+    fn test_shape_has_source_span() {
+        let source = "(box :width 10 :depth 10 :height 10)";
+        let result = eval(source);
+        match result {
+            Value::Shape(tracked) => {
+                assert_eq!(tracked.span.start, 0);
+                assert_eq!(tracked.span.end, source.len());
+            }
+            other => panic!("expected Shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_shape_span_with_preceding_defvar() {
+        let source = "(defvar x 10) (box :width x :depth x :height x)";
+        let result = eval(source);
+        match result {
+            Value::Shape(tracked) => {
+                // Span should cover the box expression, not the defvar
+                assert_eq!(
+                    &source[tracked.span.start..tracked.span.end],
+                    "(box :width x :depth x :height x)"
+                );
+            }
+            other => panic!("expected Shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_nested_shape_gets_outer_span() {
+        let source = "(difference (box :width 20 :depth 20 :height 20) (sphere :radius 12))";
+        let result = eval(source);
+        match result {
+            Value::Shape(tracked) => {
+                // Span covers the entire difference expression
+                assert_eq!(tracked.span.start, 0);
+                assert_eq!(tracked.span.end, source.len());
+            }
+            other => panic!("expected Shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_assembly_parts_have_spans() {
+        let source = r#"(assembly "test"
+  (place :part (box :width 10 :depth 10 :height 5) :as :base)
+  (place :part (cylinder :radius 2 :height 10) :as :pin))"#;
+        let result = eval(source);
+        match result {
+            Value::Assembly(assembly) => {
+                assert_eq!(assembly.parts.len(), 2);
+                let span0 = &assembly.parts[0]
+                    .shape
+                    .as_ref()
+                    .expect("base should have shape")
+                    .span;
+                let span1 = &assembly.parts[1]
+                    .shape
+                    .as_ref()
+                    .expect("pin should have shape")
+                    .span;
+                // Each part should have a distinct, non-dummy span
+                assert!(span0.end > span0.start, "base span should be non-empty");
+                assert!(span1.end > span1.start, "pin span should be non-empty");
+                // Spans should be different (not the whole assembly)
+                assert_ne!(
+                    span0.start, span1.start,
+                    "parts should have different span starts"
+                );
+                // Spans should point to the (place ...) expressions
+                let base_text = &source[span0.start..span0.end];
+                let pin_text = &source[span1.start..span1.end];
+                assert!(
+                    base_text.starts_with("(place"),
+                    "base span should cover (place ...), got: {base_text}"
+                );
+                assert!(
+                    pin_text.starts_with("(place"),
+                    "pin span should cover (place ...), got: {pin_text}"
+                );
+            }
+            other => panic!("expected Assembly, got {other:?}"),
+        }
+    }
+
+    // === New built-in tests ===
+
+    // --- Math functions ---
+
+    #[test]
+    fn test_tan() {
+        let result = eval("(tan 0)");
+        assert_eq!(result, Value::Float(0.0));
+    }
+
+    #[test]
+    fn test_acos() {
+        let result = eval("(acos 1)");
+        match result {
+            Value::Float(v) => assert!(v.abs() < 1e-10),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_atan() {
+        let result = eval("(atan 0)");
+        assert_eq!(result, Value::Float(0.0));
+    }
+
+    #[test]
+    fn test_atan2() {
+        let result = eval("(atan2 1 1)");
+        match result {
+            Value::Float(v) => assert!((v - std::f64::consts::FRAC_PI_4).abs() < 1e-10),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_abs() {
+        assert_eq!(eval("(abs -5)"), Value::Float(5.0));
+        assert_eq!(eval("(abs 3)"), Value::Float(3.0));
+    }
+
+    #[test]
+    fn test_mod() {
+        assert_eq!(eval("(mod 10 3)"), Value::Float(1.0));
+    }
+
+    #[test]
+    fn test_expt() {
+        assert_eq!(eval("(expt 2 10)"), Value::Float(1024.0));
+    }
+
+    #[test]
+    fn test_floor_ceil() {
+        assert_eq!(eval("(floor 3.7)"), Value::Float(3.0));
+        assert_eq!(eval("(ceil 3.2)"), Value::Float(4.0));
+    }
+
+    #[test]
+    fn test_min_max() {
+        assert_eq!(eval("(min 3 1 2)"), Value::Float(1.0));
+        assert_eq!(eval("(max 3 1 2)"), Value::Float(3.0));
+    }
+
+    // --- List functions ---
+
+    #[test]
+    fn test_cons() {
+        assert_eq!(
+            eval("(cons 1 (list 2 3))"),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
+    }
+
+    #[test]
+    fn test_car_cdr() {
+        assert_eq!(eval("(car (list 1 2 3))"), Value::Int(1));
+        assert_eq!(
+            eval("(cdr (list 1 2 3))"),
+            Value::List(vec![Value::Int(2), Value::Int(3)])
+        );
+        assert_eq!(eval("(car nil)"), Value::Nil);
+        assert_eq!(eval("(cdr (list 1))"), Value::Nil);
+    }
+
+    #[test]
+    fn test_append() {
+        assert_eq!(
+            eval("(append (list 1 2) (list 3 4))"),
+            Value::List(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_nth() {
+        assert_eq!(eval("(nth 0 (list 10 20 30))"), Value::Int(10));
+        assert_eq!(eval("(nth 2 (list 10 20 30))"), Value::Int(30));
+        assert_eq!(eval("(nth 5 (list 10 20 30))"), Value::Nil);
+    }
+
+    #[test]
+    fn test_length() {
+        assert_eq!(eval("(length (list 1 2 3))"), Value::Int(3));
+        assert_eq!(eval("(length nil)"), Value::Int(0));
+    }
+
+    #[test]
+    fn test_reverse() {
+        assert_eq!(
+            eval("(reverse (list 1 2 3))"),
+            Value::List(vec![Value::Int(3), Value::Int(2), Value::Int(1)])
+        );
+    }
+
+    #[test]
+    fn test_last() {
+        assert_eq!(eval("(last (list 1 2 3))"), Value::Int(3));
+        assert_eq!(eval("(last nil)"), Value::Nil);
+    }
+
+    // --- Special forms ---
+
+    #[test]
+    fn test_when() {
+        assert_eq!(eval("(when t 42)"), Value::Float(42.0));
+        assert_eq!(eval("(when nil 42)"), Value::Nil);
+    }
+
+    #[test]
+    fn test_unless() {
+        assert_eq!(eval("(unless nil 42)"), Value::Float(42.0));
+        assert_eq!(eval("(unless t 42)"), Value::Nil);
+    }
+
+    #[test]
+    fn test_and() {
+        assert_eq!(eval("(and 1 2 3)"), Value::Float(3.0));
+        assert_eq!(eval("(and 1 nil 3)"), Value::Nil);
+        assert_eq!(eval("(and)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn test_or() {
+        assert_eq!(eval("(or nil nil 3)"), Value::Float(3.0));
+        assert_eq!(eval("(or nil nil)"), Value::Nil);
+        assert_eq!(eval("(or 1 2)"), Value::Float(1.0));
+    }
+
+    #[test]
+    fn test_setf() {
+        assert_eq!(eval("(defvar x 1) (setf x 42) x"), Value::Float(42.0));
+    }
+
+    #[test]
+    fn test_setf_undefined() {
+        let err = eval_err("(setf nonexistent 42)");
+        assert!(matches!(err, FernError::UndefinedVariable { .. }));
+    }
+
+    #[test]
+    fn test_dotimes() {
+        // Sum 0..4 using dotimes + setf
+        assert_eq!(
+            eval("(defvar sum 0) (dotimes (i 5) (setf sum (+ sum i))) sum"),
+            Value::Float(10.0) // 0+1+2+3+4
+        );
+    }
+
+    #[test]
+    fn test_dolist() {
+        assert_eq!(
+            eval("(defvar sum 0) (dolist (x (list 10 20 30)) (setf sum (+ sum x))) sum"),
+            Value::Float(60.0)
+        );
+    }
+
+    #[test]
+    fn test_mapcar() {
+        assert_eq!(
+            eval("(mapcar (lambda (x) (* x 2)) (list 1 2 3))"),
+            Value::List(vec![
+                Value::Float(2.0),
+                Value::Float(4.0),
+                Value::Float(6.0)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_reduce() {
+        assert_eq!(
+            eval("(reduce (lambda (a b) (+ a b)) (list 1 2 3 4))"),
+            Value::Float(10.0)
+        );
+        // With initial value
+        assert_eq!(
+            eval("(reduce (lambda (a b) (+ a b)) (list 1 2 3) 10)"),
+            Value::Float(16.0)
+        );
+    }
+
+    #[test]
+    fn test_remove_if() {
+        assert_eq!(
+            eval("(remove-if (lambda (x) (> x 2)) (list 1 2 3 4))"),
+            Value::List(vec![Value::Int(1), Value::Int(2)])
+        );
+    }
+
+    #[test]
+    fn test_apply() {
+        assert_eq!(eval("(apply + (list 1 2 3))"), Value::Float(6.0));
+    }
+
+    // --- Type predicates ---
+
+    #[test]
+    fn test_numberp() {
+        assert_eq!(eval("(numberp 42)"), Value::Bool(true));
+        assert_eq!(eval("(numberp \"hello\")"), Value::Bool(false));
+    }
+
+    #[test]
+    fn test_listp() {
+        assert_eq!(eval("(listp (list 1 2))"), Value::Bool(true));
+        assert_eq!(eval("(listp 42)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn test_nilp() {
+        assert_eq!(eval("(nilp nil)"), Value::Bool(true));
+        assert_eq!(eval("(nilp 42)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn test_stringp() {
+        assert_eq!(eval("(stringp \"hello\")"), Value::Bool(true));
+        assert_eq!(eval("(stringp 42)"), Value::Bool(false));
+    }
+
+    // --- Format ---
+
+    #[test]
+    fn test_format() {
+        assert_eq!(
+            eval(r#"(format "Hello ~a, you are ~d" "world" 42)"#),
+            Value::Str("Hello world, you are 42".to_string())
+        );
+    }
+
+    // --- Integration: build a list with dotimes ---
+
+    #[test]
+    fn test_dotimes_build_list() {
+        // Build polygon-like point list using dotimes
+        assert_eq!(
+            eval(
+                r#"
+                (defvar pts (list))
+                (dotimes (i 4)
+                  (setf pts (append pts (list (list (cos (* i 1.5707963)) (sin (* i 1.5707963)))))))
+                (length pts)
+            "#
+            ),
+            Value::Int(4)
+        );
+    }
+
+    // --- Integration: mapcar + reduce for functional style ---
+
+    #[test]
+    fn test_functional_pipeline() {
+        // Generate list of squares, filter, sum
+        assert_eq!(
+            eval(
+                r#"
+                (reduce
+                  (lambda (a b) (+ a b))
+                  (remove-if
+                    (lambda (x) (> x 10))
+                    (mapcar (lambda (x) (* x x)) (list 1 2 3 4 5)))
+                  0)
+            "#
+            ),
+            Value::Float(14.0) // 1+4+9 = 14 (16 and 25 filtered out)
+        );
+    }
+
+    #[test]
+    fn test_shape_arc_sharing() {
+        // Verify that shapes stored in variables share Arc pointers
+        let result = eval(
+            r#"
+            (defvar my-box (box :width 10 :depth 10 :height 10))
+            (union my-box (translate :shape my-box :by #v(20 0 0)))
+            "#,
+        );
+        match result {
+            Value::Shape(tracked) => match &*tracked.node {
+                ShapeNode::Union { children } => {
+                    assert_eq!(children.len(), 2);
+                    // Both children should reference the same box via Arc
+                    if let ShapeNode::Translate { shape, .. } = &*children[1] {
+                        assert!(
+                            Arc::ptr_eq(&children[0], shape),
+                            "shapes from same variable should share Arc pointer"
+                        );
+                    } else {
+                        panic!("expected Translate as second child");
+                    }
+                }
+                other => panic!("expected Union, got {other:?}"),
+            },
+            other => panic!("expected Shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_mapcar_no_extra_clone() {
+        // mapcar should work correctly without cloning the entire list
+        assert_eq!(
+            eval("(mapcar (lambda (x) (* x 2)) (list 1 2 3))"),
+            Value::List(vec![
+                Value::Float(2.0),
+                Value::Float(4.0),
+                Value::Float(6.0)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_dolist_no_extra_clone() {
+        // dolist should work with borrowed list and return last body expr
+        assert_eq!(
+            eval(
+                r#"
+                (dolist (x (list 10 20 30))
+                  (* x 2))
+                "#
+            ),
+            Value::Float(60.0)
+        );
     }
 }
