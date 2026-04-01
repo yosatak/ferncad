@@ -29,12 +29,23 @@
 | `let*` | `(let* ((var val) ...) body...)` | 逐次ローカル束縛 |
 | `if` | `(if cond then else)` | 条件分岐 |
 | `cond` | `(cond (test1 body1) (test2 body2) ...)` | 多分岐条件 |
+| `when` | `(when condition body...)` | 真の場合に本体を実行 |
+| `unless` | `(unless condition body...)` | 偽の場合に本体を実行 |
+| `and` | `(and expr...)` | 短絡論理積（最後の真値または nil を返す） |
+| `or` | `(or expr...)` | 短絡論理和（最初の真値または nil を返す） |
+| `setf` | `(setf name value)` | 既存の変数を更新 |
 | `lambda` | `(lambda (params) body...)` | 無名関数 |
 | `quote` | `(quote expr)` | 未評価で返す |
 | `quasiquote` | `` `expr `` | テンプレート（unquote 付き） |
 | `progn` | `(progn body...)` | 逐次評価 |
+| `dotimes` | `(dotimes (var count) body...)` | var を 0 から count-1 まで繰り返す |
+| `dolist` | `(dolist (var list) body...)` | リストの各要素で繰り返す |
+| `mapcar` | `(mapcar fn list)` | 各要素に fn を適用 |
+| `reduce` | `(reduce fn list [initial])` | リストを畳み込む |
+| `remove-if` | `(remove-if predicate list)` | 述語に一致する要素を除去 |
+| `apply` | `(apply fn args-list)` | 引数リストに fn を適用 |
 | `assembly` | `(assembly "name" body...)` | アセンブリ定義 |
-| `require` | `(require "module-name")` | モジュール読み込み |
+| `require` | `(require "module-name")` | モジュール読み込み（ユーザーファイルまたはビルトイン） |
 | `export` | `(export name1 name2 ...)` | シンボルのエクスポート |
 
 ## 準クォート構文
@@ -122,11 +133,35 @@
 
 ## 算術・数学関数
 
-`+`, `-`, `*`, `/`, `cos`, `sin`, `sqrt`, `pi`
+`+`, `-`, `*`, `/`, `cos`, `sin`, `tan`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `mod`, `expt`, `floor`, `ceil`, `min`, `max`, `pi`
 
-## 比較演算
+## 比較・論理演算
 
 `=`, `<`, `>`, `<=`, `>=`, `not`
+
+## リスト操作
+
+| 関数 | 引数 | 説明 |
+|------|------|------|
+| `list` | `(list a b ...)` | リストを作成 |
+| `cons` | `(cons item list)` | リストの先頭に追加 |
+| `car` | `(car list)` | 最初の要素 |
+| `cdr` | `(cdr list)` | 先頭を除いた残り |
+| `append` | `(append list1 list2 ...)` | リストを連結 |
+| `nth` | `(nth n list)` | n番目の要素（0始まり） |
+| `length` | `(length list)` | 要素数 |
+| `reverse` | `(reverse list)` | リストを逆順に |
+| `last` | `(last list)` | 最後の要素 |
+
+## 型述語
+
+`numberp`, `listp`, `nilp`, `stringp`
+
+## 文字列操作
+
+| 関数 | 引数 | 説明 |
+|------|------|------|
+| `format` | `(format template args...)` | 文字列フォーマット（`~a` 任意, `~d` 整数, `~f` 浮動小数点, `~%` 改行） |
 
 ## アセンブリ
 

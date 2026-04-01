@@ -10,7 +10,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/lint": "^6.9.5",
+    "@mlc-ai/web-llm": "^0.2.82",
     "three": "^0.170.0"
   },
   "devDependencies": {

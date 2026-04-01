@@ -67,12 +67,26 @@ impl Env {
         })
     }
 
-    /// Check whether a variable is defined
+    /// Mutate an existing variable (traversing the scope chain).
+    ///
+    /// Returns `true` if the variable was found and updated, `false` otherwise.
+    pub fn set(&mut self, name: &str, value: Value) -> bool {
+        if self.bindings.contains_key(name) {
+            self.bindings.insert(name.to_string(), value);
+            return true;
+        }
+        if let Some(parent) = &self.parent {
+            return parent.borrow_mut().set(name, value);
+        }
+        false
+    }
+
     /// Iterate over bindings in this environment (not including parents)
     pub fn bindings(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.bindings.iter()
     }
 
+    /// Check whether a variable is defined
     pub fn is_defined(&self, name: &str) -> bool {
         if self.bindings.contains_key(name) {
             return true;

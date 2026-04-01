@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::face::{AxisRef, FaceRef};
-use crate::types::{PartDef, Value};
+use crate::types::{PartDef, TrackedShape, Value};
 
 /// Assembly definition
 #[derive(Debug, Clone)]
@@ -30,8 +30,8 @@ pub struct PartInstance {
     pub part_def: Arc<PartDef>,
     /// Parameter values
     pub params: HashMap<String, Value>,
-    /// Shape node (evaluated)
-    pub shape: Option<Arc<crate::types::ShapeNode>>,
+    /// Shape node with source span (evaluated)
+    pub shape: Option<Arc<TrackedShape>>,
     /// 4x4 transform matrix (column-major)
     pub transform: [f64; 16],
     /// Color (RGB 0-1)

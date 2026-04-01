@@ -19,6 +19,27 @@ impl std::fmt::Display for SourceLocation {
     }
 }
 
+/// Byte-range span in source code (for source location tracking)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpan {
+    /// Start byte offset (0-based, inclusive)
+    pub start: usize,
+    /// End byte offset (0-based, exclusive)
+    pub end: usize,
+}
+
+impl SourceSpan {
+    /// Create a dummy span (used when no real location is available)
+    pub fn dummy() -> Self {
+        Self { start: 0, end: 0 }
+    }
+
+    /// Convert to line/column location
+    pub fn to_location(&self, source: &str) -> SourceLocation {
+        offset_to_location(source, self.start)
+    }
+}
+
 /// Compute line and column numbers from a byte offset in source code
 pub fn offset_to_location(source: &str, offset: usize) -> SourceLocation {
     let mut line = 1;

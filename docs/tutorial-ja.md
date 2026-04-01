@@ -271,6 +271,30 @@ ferncad model.fern --segments 64 --stl output.stl
          :at #p(-10 -10 5)))
 ```
 
+## マルチファイルプロジェクト
+
+Web UI はマルチファイルプロジェクトに対応しています。左サイドバーのファイルエクスプローラで
+`.fern` ファイルの作成・リネーム・削除が可能です。
+
+ファイル間の参照には `require` を使います：
+
+```lisp
+;; utils.fern
+(defun plate (w d h)
+  (box :width w :depth d :height h))
+
+;; main.fern（エントリーポイント — 常に最初に評価）
+(require "utils")
+(plate 40 40 5)
+```
+
+`require` は以下の順に名前を解決します：
+1. プロジェクトファイル（完全一致、次に `.fern` 拡張子付き）
+2. ビルトイン標準ライブラリモジュール
+
+プロジェクトはブラウザの IndexedDB に保存されます。ツールバーのボタンで
+プロジェクトの新規作成・保存・読込が可能です。
+
 ## 標準ライブラリ
 
 `require` で読み込み可能なモジュール：

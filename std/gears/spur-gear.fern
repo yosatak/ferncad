@@ -1,0 +1,136 @@
+;;;; spur-gear.fern
+;;;; ========================================
+;;;; JIS B 1701 準拠 インボリュート平歯車
+;;;; ========================================
+
+;;; --- ヘルパー関数 ---
+
+(defun involute-flank (r-base r-addendum half-thick-angle n-pts)
+  "1歯分のインボリュートフランクポイントを返す（原点中心、歯の中心が角度0）。
+   CCW走査順: 左フランク(下→上) → 歯先 → 右フランク(上→下)。
+   歯底やベース円への遷移は含まない（呼び出し側で処理する）。"
+  (let* (;; インボリュートパラメータ範囲（ベース円から歯先まで）
+         (t-max (sqrt (max 0.0 (- (expt (/ r-addendum r-base) 2.0) 1.0))))
+
+         ;; === 左フランク (負角度側、下→上) ===
+         (left-flank (list))
+         (_ (dotimes (j (+ n-pts 1))
+              (let* ((t-param (* (/ j n-pts) t-max))
+                     (r (min (* r-base (sqrt (+ 1.0 (* t-param t-param)))) r-addendum))
+                     (inv-a (if (> t-param 0.001)
+                                (- t-param (atan t-param))
+                                0.0))
+                     (angle (- inv-a half-thick-angle)))
+                (setf left-flank (append left-flank
+                  (list (list (* r (cos angle)) (* r (sin angle)))))))))
+
+         ;; === 歯先 ===
+         (tip-pts (list (list r-addendum 0.0)))
+
+         ;; === 右フランク (正角度側、上→下) ===
+         (right-flank (list))
+         (_ (dotimes (j (+ n-pts 1))
+              (let* ((j-rev (- n-pts j))
+                     (t-param (* (/ j-rev n-pts) t-max))
+                     (r (min (* r-base (sqrt (+ 1.0 (* t-param t-param)))) r-addendum))
+                     (inv-a (if (> t-param 0.001)
+                                (- t-param (atan t-param))
+                                0.0))
+                     (angle (- half-thick-angle inv-a)))
+                (setf right-flank (append right-flank
+                  (list (list (* r (cos angle)) (* r (sin angle))))))))))
+
+    (append left-flank tip-pts right-flank)))
+
+;;; --- メインパーツ定義 ---
+
+(defpart spur-gear
+  "JIS B 1701 準拠のインボリュート平歯車。
+
+   PARAMS:
+     module         : モジュール (歯の大きさ mm)
+     teeth          : 歯数
+     face-width     : 歯幅 (mm)
+     pressure-angle : 圧力角 (rad, デフォルト 20°)
+     bore           : 中心穴径 (0 で穴なし)
+
+   使用例:
+     (spur-gear :module 2 :teeth 20 :face-width 10)"
+
+  :meta (:category :power-transmission
+         :standard "JIS B 1701"
+         :material :steel
+         :description "インボリュート平歯車")
+
+  :params ((module :: float :default 2.0 :doc "モジュール (mm)")
+           (teeth :: float :default 20.0 :doc "歯数")
+           (face-width :: length :default 10.0 :doc "歯幅 (mm)")
+           (pressure-angle :: float :default 0.3491 :doc "圧力角 (rad)")
+           (bore :: length :default 0.0 :doc "中心穴径 (mm)"))
+
+  :faces ((:top "上面") (:bottom "下面"))
+  :axes ((:center "中心軸"))
+
+  :body
+  (let* (;; 基本寸法
+         (r-pitch (/ (* module teeth) 2.0))
+         (r-base (* r-pitch (cos pressure-angle)))
+         (r-addendum (+ r-pitch module))
+         (r-dedendum (- r-pitch (* 1.25 module)))
+         (tooth-pitch (/ (* 2.0 pi) teeth))
+
+         ;; ピッチ円上での歯厚半角
+         (inv-alpha (- (tan pressure-angle) pressure-angle))
+         (half-thick-angle (/ (+ (/ pi teeth) (* 2.0 inv-alpha)) 2.0))
+
+         ;; 1歯のインボリュートフランクのみ (歯底遷移なし)
+         (single-flank (involute-flank r-base r-addendum half-thick-angle 8))
+
+         ;; フランク開始角度（ベース円上での角度 = half-thick-angle）
+         ;; この角度で歯底→ベース円の半径方向遷移が起きる
+         (flank-base-angle half-thick-angle)
+
+         ;; 全歯のプロファイル構築
+         (profile (list))
+         (_ (dotimes (i teeth)
+              (let* ((center-angle (* i tooth-pitch))
+                     (ca (cos center-angle))
+                     (sa (sin center-angle))
+                     ;; 歯底円弧の範囲 (ローカル座標)
+                     ;; 前の歯の右フランク端 → この歯の左フランク端
+                     (gap-start (- 0.0 (- tooth-pitch flank-base-angle)))
+                     (gap-end (- 0.0 flank-base-angle))
+                     (n-root 4))
+
+                ;; 歯底円弧 (dedendum radius)
+                ;; 歯底→フランクの半径方向遷移は
+                ;; root最終点(r_ded)→flank先頭(r_base) の接続で暗黙的に生まれる
+                (dotimes (k n-root)
+                  (let* ((frac (/ k (- n-root 1.0)))
+                         (a (+ gap-start (* frac (- gap-end gap-start))))
+                         (lx (* r-dedendum (cos a)))
+                         (ly (* r-dedendum (sin a)))
+                         (gx (- (* lx ca) (* ly sa)))
+                         (gy (+ (* lx sa) (* ly ca))))
+                    (setf profile (append profile (list (list gx gy))))))
+
+                ;; インボリュートフランク (左→歯先→右)
+                ;; flank先頭は r_base at -flank_base_angle、
+                ;; flank末尾は r_base at +flank_base_angle
+                (dolist (pt single-flank)
+                  (let* ((px (nth 0 pt))
+                         (py (nth 1 pt))
+                         (gx (- (* px ca) (* py sa)))
+                         (gy (+ (* px sa) (* py ca))))
+                    (setf profile (append profile (list (list gx gy)))))))))
+
+         ;; 押し出して3D化
+         (gear-body (extrude :profile profile :height face-width)))
+
+    ;; 中心穴
+    (if (> bore 0.0)
+        (difference gear-body
+                   (cylinder :radius (/ bore 2.0) :height (+ face-width 2.0)))
+        gear-body)))
+
+(export spur-gear)

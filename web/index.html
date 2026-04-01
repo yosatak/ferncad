@@ -14,15 +14,20 @@
         <button id="btn-evaluate" title="Evaluate (Ctrl+Enter)">▶ Run</button>
         <button id="btn-export-stl" title="Export STL">STL</button>
         <button id="btn-export-step" title="Export STEP (exact geometry)">STEP</button>
-        <button id="btn-save" title="Save model">Save</button>
-        <button id="btn-load" title="Load model">Load</button>
+        <button id="btn-new-project" title="New project">New</button>
+        <button id="btn-save" title="Save project">Save</button>
+        <button id="btn-load" title="Open project">Open</button>
+        <button id="btn-ai" title="AI Assistant (Ctrl+L)">AI</button>
       </div>
     </header>
     <main id="workspace">
+      <div id="file-explorer"></div>
       <div id="editor-panel">
+        <div id="tab-bar"></div>
         <div id="editor-container"></div>
         <div id="status-bar"></div>
       </div>
+      <div id="resize-handle"></div>
       <div id="viewer-panel">
         <div id="assembly-tree"></div>
         <div id="param-panel" class="hidden"></div>

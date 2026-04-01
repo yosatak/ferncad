@@ -39,6 +39,14 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         name: "ferncad-std/spring-washer",
         source: include_str!("../../../std/fasteners/spring-washer.fern"),
     },
+    BuiltinModule {
+        name: "ferncad-std/spur-gear",
+        source: include_str!("../../../std/gears/spur-gear.fern"),
+    },
+    BuiltinModule {
+        name: "ferncad-std/bevel-gear",
+        source: include_str!("../../../std/gears/bevel-gear.fern"),
+    },
 ];
 
 /// Module loader
@@ -46,6 +54,8 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
 pub struct ModuleLoader {
     /// Cache of loaded modules
     loaded: HashMap<String, bool>,
+    /// User-provided module sources (from project files)
+    user_modules: HashMap<String, String>,
 }
 
 impl ModuleLoader {
@@ -53,7 +63,31 @@ impl ModuleLoader {
     pub fn new() -> Self {
         Self {
             loaded: HashMap::new(),
+            user_modules: HashMap::new(),
         }
+    }
+
+    /// Register a user-provided module (e.g. from a project file)
+    pub fn add_user_module(&mut self, name: String, source: String) {
+        self.user_modules.insert(name, source);
+    }
+
+    /// Search for a module source: user modules first, then builtins.
+    ///
+    /// Tries exact name, then with `.fern` suffix appended.
+    /// Returns an owned `String` to avoid borrow conflicts during evaluation.
+    pub fn find_module(&self, name: &str) -> Option<String> {
+        // Try exact name in user modules
+        if let Some(src) = self.user_modules.get(name) {
+            return Some(src.clone());
+        }
+        // Try with .fern suffix
+        let with_ext = format!("{name}.fern");
+        if let Some(src) = self.user_modules.get(&with_ext) {
+            return Some(src.clone());
+        }
+        // Fall back to builtins
+        Self::find_builtin(name).map(|s| s.to_string())
     }
 
     /// Search for an embedded module source
@@ -77,6 +111,15 @@ impl ModuleLoader {
     /// Return a list of available embedded module names
     pub fn available_modules() -> Vec<&'static str> {
         BUILTIN_MODULES.iter().map(|m| m.name).collect()
+    }
+
+    /// Return all available module names (builtins + user modules)
+    pub fn available_modules_all(&self) -> Vec<String> {
+        let mut mods: Vec<String> = BUILTIN_MODULES.iter().map(|m| m.name.to_string()).collect();
+        for name in self.user_modules.keys() {
+            mods.push(name.clone());
+        }
+        mods
     }
 }
 
@@ -109,5 +152,63 @@ mod tests {
         assert!(!loader.is_loaded("test"));
         loader.mark_loaded("test");
         assert!(loader.is_loaded("test"));
+    }
+
+    #[test]
+    fn test_user_module_exact_name() {
+        let mut loader = ModuleLoader::new();
+        loader.add_user_module("utils".to_string(), "(defvar x 1)".to_string());
+        let src = loader.find_module("utils");
+        assert_eq!(src, Some("(defvar x 1)".to_string()));
+    }
+
+    #[test]
+    fn test_user_module_with_fern_suffix() {
+        let mut loader = ModuleLoader::new();
+        loader.add_user_module("utils.fern".to_string(), "(defvar x 1)".to_string());
+        let src = loader.find_module("utils");
+        assert_eq!(src, Some("(defvar x 1)".to_string()));
+    }
+
+    #[test]
+    fn test_user_module_overrides_builtin() {
+        let mut loader = ModuleLoader::new();
+        loader.add_user_module(
+            "ferncad-std/m3-bolt".to_string(),
+            "(defvar custom 1)".to_string(),
+        );
+        let src = loader.find_module("ferncad-std/m3-bolt").unwrap();
+        assert_eq!(src, "(defvar custom 1)");
+    }
+
+    #[test]
+    fn test_find_module_falls_back_to_builtin() {
+        let loader = ModuleLoader::new();
+        let src = loader.find_module("ferncad-std/m3-bolt");
+        assert!(src.is_some());
+        assert!(src.unwrap().contains("m3-bolt"));
+    }
+
+    #[test]
+    fn test_available_modules_all() {
+        let mut loader = ModuleLoader::new();
+        loader.add_user_module("my-lib.fern".to_string(), "".to_string());
+        let all = loader.available_modules_all();
+        assert!(all.contains(&"ferncad-std/m3-bolt".to_string()));
+        assert!(all.contains(&"my-lib.fern".to_string()));
+    }
+
+    #[test]
+    fn test_find_spur_gear_module() {
+        let source = ModuleLoader::find_builtin("ferncad-std/spur-gear");
+        assert!(source.is_some());
+        assert!(source.unwrap().contains("spur-gear"));
+    }
+
+    #[test]
+    fn test_find_bevel_gear_module() {
+        let source = ModuleLoader::find_builtin("ferncad-std/bevel-gear");
+        assert!(source.is_some());
+        assert!(source.unwrap().contains("bevel-gear"));
     }
 }

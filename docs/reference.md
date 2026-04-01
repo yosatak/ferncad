@@ -29,12 +29,23 @@
 | `let*` | `(let* ((var val) ...) body...)` | Sequential local bindings |
 | `if` | `(if cond then else)` | Conditional |
 | `cond` | `(cond (test1 body1) (test2 body2) ...)` | Multi-branch conditional |
+| `when` | `(when condition body...)` | Execute body if truthy |
+| `unless` | `(unless condition body...)` | Execute body if falsy |
+| `and` | `(and expr...)` | Short-circuit and (returns last truthy or nil) |
+| `or` | `(or expr...)` | Short-circuit or (returns first truthy or nil) |
+| `setf` | `(setf name value)` | Mutate an existing variable |
 | `lambda` | `(lambda (params) body...)` | Anonymous function |
 | `quote` | `(quote expr)` | Return unevaluated |
 | `quasiquote` | `` `expr `` | Template with unquote |
 | `progn` | `(progn body...)` | Evaluate sequentially |
+| `dotimes` | `(dotimes (var count) body...)` | Loop var from 0 to count-1 |
+| `dolist` | `(dolist (var list) body...)` | Iterate over a list |
+| `mapcar` | `(mapcar fn list)` | Apply fn to each element |
+| `reduce` | `(reduce fn list [initial])` | Fold over list elements |
+| `remove-if` | `(remove-if predicate list)` | Remove elements matching predicate |
+| `apply` | `(apply fn args-list)` | Apply fn to a list of arguments |
 | `assembly` | `(assembly "name" body...)` | Multi-part assembly |
-| `require` | `(require "module-name")` | Load a module |
+| `require` | `(require "module-name")` | Load a module (user file or builtin) |
 | `export` | `(export name1 name2 ...)` | Export symbols |
 
 ## Quasiquote Syntax
@@ -105,13 +116,37 @@
 | `fillet` | Not supported | truck 0.6 limitation |
 | `shell` | Not supported | truck 0.6 limitation |
 
-## Arithmetic
+## Arithmetic & Math
 
-`+`, `-`, `*`, `/`, `cos`, `sin`, `sqrt`, `pi`
+`+`, `-`, `*`, `/`, `cos`, `sin`, `tan`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `mod`, `expt`, `floor`, `ceil`, `min`, `max`, `pi`
 
-## Comparison
+## Comparison & Logic
 
 `=`, `<`, `>`, `<=`, `>=`, `not`
+
+## List Operations
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `list` | `(list a b ...)` | Create a list |
+| `cons` | `(cons item list)` | Prepend item to list |
+| `car` | `(car list)` | First element |
+| `cdr` | `(cdr list)` | Tail (all but first) |
+| `append` | `(append list1 list2 ...)` | Concatenate lists |
+| `nth` | `(nth n list)` | Element at index n (0-based) |
+| `length` | `(length list)` | Number of elements |
+| `reverse` | `(reverse list)` | Reversed list |
+| `last` | `(last list)` | Last element |
+
+## Type Predicates
+
+`numberp`, `listp`, `nilp`, `stringp`
+
+## String Operations
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `format` | `(format template args...)` | Format string (`~a` any, `~d` integer, `~f` float, `~%` newline) |
 
 ## Assembly
 

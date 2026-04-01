@@ -14,6 +14,16 @@ export interface PartMeshData {
   positions: Float32Array;
   normals: Float32Array;
   color: [number, number, number];
+  /** Source span start (byte offset) for editor↔viewer highlighting */
+  spanStart: number;
+  /** Source span end (byte offset) for editor↔viewer highlighting */
+  spanEnd: number;
+}
+
+/** Span info for a part */
+interface PartSpan {
+  start: number;
+  end: number;
 }
 
 /** 3D viewer class */
@@ -23,6 +33,13 @@ export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private partsGroup: THREE.Group;
+  private raycaster: THREE.Raycaster;
+  private highlightedMesh: THREE.Mesh | null = null;
+  private partSpans: Map<string, PartSpan> = new Map();
+  private mouseDownPos: { x: number; y: number } | null = null;
+
+  /** Callback fired when a part is clicked in the viewer */
+  onPartClick: ((span: PartSpan) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
@@ -39,7 +56,8 @@ export class Viewer {
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+    // Pass false to avoid setting CSS styles, which would override flex layout
+    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
     // Lighting
     this.scene.add(new THREE.AmbientLight(0x404040, 2));
@@ -65,13 +83,34 @@ export class Viewer {
     this.partsGroup = new THREE.Group();
     this.scene.add(this.partsGroup);
 
-    // Resize
+    // Raycaster for part selection
+    this.raycaster = new THREE.Raycaster();
+
+    // Click detection (distinguish from orbit drag)
+    canvas.addEventListener('mousedown', (e) => {
+      this.mouseDownPos = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('mouseup', (e) => {
+      if (!this.mouseDownPos) return;
+      const dx = e.clientX - this.mouseDownPos.x;
+      const dy = e.clientY - this.mouseDownPos.y;
+      // Only treat as click if mouse didn't move much (not a drag)
+      if (dx * dx + dy * dy < 9) {
+        this.handleClick(e);
+      }
+      this.mouseDownPos = null;
+    });
+
+    // Resize — observe the canvas element. We use setSize with updateStyle=false
+    // so the CSS flex layout controls the canvas dimensions, and we only update
+    // the WebGL drawing buffer to match.
     const resizeObserver = new ResizeObserver(() => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
+      if (w <= 0 || h <= 0) return;
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(w, h);
+      this.renderer.setSize(w, h, false);
     });
     resizeObserver.observe(canvas);
 
@@ -85,12 +124,24 @@ export class Viewer {
       positions,
       normals,
       color: [0.53, 0.53, 0.80],
+      spanStart: 0,
+      spanEnd: 0,
     }]);
   }
 
   /** Update with per-part meshes */
   updateParts(parts: PartMeshData[]): void {
     this.clearMesh();
+    this.clearHighlight();
+    this.partSpans.clear();
+
+    // Store span info for each part
+    for (const part of parts) {
+      this.partSpans.set(part.name, {
+        start: part.spanStart,
+        end: part.spanEnd,
+      });
+    }
 
     for (const part of parts) {
       if (part.positions.length === 0) continue;
@@ -138,6 +189,70 @@ export class Viewer {
         child.geometry.dispose();
         (child.material as THREE.Material).dispose();
       }
+    }
+  }
+
+  /** Highlight a part by name */
+  setHighlight(partName: string): void {
+    this.clearHighlight();
+    for (const child of this.partsGroup.children) {
+      if (child instanceof THREE.Mesh && child.name === partName) {
+        const mat = child.material as THREE.MeshStandardMaterial;
+        mat.emissive.set(0x335599);
+        mat.emissiveIntensity = 0.4;
+        this.highlightedMesh = child;
+        break;
+      }
+    }
+  }
+
+  /** Clear any part highlight */
+  clearHighlight(): void {
+    if (this.highlightedMesh) {
+      const mat = this.highlightedMesh.material as THREE.MeshStandardMaterial;
+      mat.emissive.set(0x000000);
+      mat.emissiveIntensity = 0;
+      this.highlightedMesh = null;
+    }
+  }
+
+  /** Get span for a part name */
+  getPartSpan(partName: string): PartSpan | undefined {
+    return this.partSpans.get(partName);
+  }
+
+  /** Find which part contains a given source offset */
+  findPartByOffset(offset: number): string | null {
+    for (const [name, span] of this.partSpans) {
+      if (offset >= span.start && offset < span.end) {
+        return name;
+      }
+    }
+    return null;
+  }
+
+  private handleClick(event: MouseEvent): void {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(mouse, this.camera);
+
+    const meshes = this.partsGroup.children.filter(
+      (c): c is THREE.Mesh => c instanceof THREE.Mesh,
+    );
+    const intersects = this.raycaster.intersectObjects(meshes);
+
+    if (intersects.length > 0) {
+      const mesh = intersects[0].object as THREE.Mesh;
+      this.setHighlight(mesh.name);
+      const span = this.partSpans.get(mesh.name);
+      if (span && this.onPartClick) {
+        this.onPartClick(span);
+      }
+    } else {
+      this.clearHighlight();
     }
   }
 

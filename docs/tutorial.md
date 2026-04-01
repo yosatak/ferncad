@@ -252,6 +252,30 @@ Combine multiple parts into assemblies:
          :at #p(-10 -10 5)))
 ```
 
+## Multi-File Projects
+
+The web UI supports multi-file projects. Use the file explorer (left sidebar)
+to create, rename, and delete `.fern` files within a project.
+
+Files can reference each other with `require`:
+
+```lisp
+;; utils.fern
+(defun plate (w d h)
+  (box :width w :depth d :height h))
+
+;; main.fern  (entry point — always evaluated first)
+(require "utils")
+(plate 40 40 5)
+```
+
+`require` resolves names in this order:
+1. Project files (exact name, then with `.fern` suffix)
+2. Built-in standard library modules
+
+Projects are stored in the browser via IndexedDB. Use the toolbar buttons
+to create, save, and open projects.
+
 ## Standard Library
 
 Available modules (use with `require`):

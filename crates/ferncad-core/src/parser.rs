@@ -4,7 +4,7 @@
 
 use logos::Span;
 
-use crate::error::{FernError, FernResult, SourceLocation};
+use crate::error::{FernError, FernResult, SourceLocation, SourceSpan};
 use crate::lexer::{span_to_location, tokenize, SpannedToken, Token};
 use crate::types::Value;
 
@@ -65,6 +65,18 @@ impl<'a> Parser<'a> {
     /// Get the source location at the given position
     fn location_at(&self, idx: usize) -> SourceLocation {
         span_to_location(self.source, self.span_at(idx))
+    }
+
+    /// Parse a single S-expression with its source span
+    fn parse_expr_spanned(&mut self) -> FernResult<(Value, Span)> {
+        let start = self.peek().map(|st| st.span.start).unwrap_or(0);
+        let value = self.parse_expr()?;
+        let end = if self.pos > 0 {
+            self.span_at(self.pos - 1).end
+        } else {
+            start
+        };
+        Ok((value, start..end))
     }
 
     /// Parse a single S-expression
@@ -349,6 +361,32 @@ pub fn parse(source: &str) -> FernResult<Vec<Value>> {
     Ok(exprs)
 }
 
+/// Parse source code into S-expressions with source spans
+///
+/// Returns each top-level expression paired with its byte range in the source.
+///
+/// # Errors
+///
+/// Returns `FernError` if the source contains syntax errors.
+pub fn parse_with_spans(source: &str) -> FernResult<Vec<(Value, SourceSpan)>> {
+    let tokens = tokenize(source)?;
+    let mut parser = Parser::new(tokens, source);
+    let mut exprs = Vec::new();
+
+    while parser.peek().is_some() {
+        let (expr, span) = parser.parse_expr_spanned()?;
+        exprs.push((
+            expr,
+            SourceSpan {
+                start: span.start,
+                end: span.end,
+            },
+        ));
+    }
+
+    Ok(exprs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +575,42 @@ mod tests {
             }
             other => panic!("expected List, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_parse_with_spans_atom() {
+        let result = parse_with_spans("42").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, Value::Int(42));
+        assert_eq!(result[0].1.start, 0);
+        assert_eq!(result[0].1.end, 2);
+    }
+
+    #[test]
+    fn test_parse_with_spans_list() {
+        let source = "(+ 1 2)";
+        let result = parse_with_spans(source).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1.start, 0);
+        assert_eq!(result[0].1.end, 7);
+    }
+
+    #[test]
+    fn test_parse_with_spans_multiple() {
+        let source = "(defvar x 1) (box :width 10 :depth 10 :height 10)";
+        let result = parse_with_spans(source).unwrap();
+        assert_eq!(result.len(), 2);
+        // First expression
+        assert_eq!(result[0].1.start, 0);
+        assert_eq!(result[0].1.end, 12);
+        // Second expression
+        assert_eq!(result[1].1.start, 13);
+        assert_eq!(result[1].1.end, 49);
+        // Verify the spans match the source text
+        assert_eq!(&source[result[0].1.start..result[0].1.end], "(defvar x 1)");
+        assert_eq!(
+            &source[result[1].1.start..result[1].1.end],
+            "(box :width 10 :depth 10 :height 10)"
+        );
     }
 }

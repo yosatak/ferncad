@@ -1,0 +1,136 @@
+;;;; bevel-gear.fern
+;;;; ========================================
+;;;; JIS B 1704 準拠 ストレートかさ歯車
+;;;; ========================================
+
+;;; --- ヘルパー関数 ---
+;;; involute-flank は spur-gear.fern と同じ定義（require で共有）
+
+(defun bevel-involute-flank (r-base r-addendum half-thick-angle n-pts)
+  "1歯分のインボリュートフランクポイント (CCW: 左→歯先→右)。"
+  (let* ((t-max (sqrt (max 0.0 (- (expt (/ r-addendum r-base) 2.0) 1.0))))
+         (left-flank (list))
+         (_ (dotimes (j (+ n-pts 1))
+              (let* ((t-param (* (/ j n-pts) t-max))
+                     (r (min (* r-base (sqrt (+ 1.0 (* t-param t-param)))) r-addendum))
+                     (inv-a (if (> t-param 0.001) (- t-param (atan t-param)) 0.0))
+                     (angle (- inv-a half-thick-angle)))
+                (setf left-flank (append left-flank
+                  (list (list (* r (cos angle)) (* r (sin angle)))))))))
+         (tip-pts (list (list r-addendum 0.0)))
+         (right-flank (list))
+         (_ (dotimes (j (+ n-pts 1))
+              (let* ((j-rev (- n-pts j))
+                     (t-param (* (/ j-rev n-pts) t-max))
+                     (r (min (* r-base (sqrt (+ 1.0 (* t-param t-param)))) r-addendum))
+                     (inv-a (if (> t-param 0.001) (- t-param (atan t-param)) 0.0))
+                     (angle (- half-thick-angle inv-a)))
+                (setf right-flank (append right-flank
+                  (list (list (* r (cos angle)) (* r (sin angle))))))))))
+    (append left-flank tip-pts right-flank)))
+
+(defun build-bevel-ring (r-base r-dedendum r-addendum half-thick-angle tooth-pitch num-teeth n-pts)
+  "歯車の全周プロファイルを構築する。"
+  (let* ((flank-base-angle half-thick-angle)
+         (single-flank (bevel-involute-flank r-base r-addendum half-thick-angle n-pts))
+         (profile (list)))
+    (dotimes (i num-teeth)
+      (let* ((center-angle (* i tooth-pitch))
+             (ca (cos center-angle))
+             (sa (sin center-angle))
+             (gap-start (- 0.0 (- tooth-pitch flank-base-angle)))
+             (gap-end (- 0.0 flank-base-angle))
+             (n-root 4))
+        ;; 歯底円弧
+        (dotimes (k n-root)
+          (let* ((frac (/ k (- n-root 1.0)))
+                 (a (+ gap-start (* frac (- gap-end gap-start))))
+                 (lx (* r-dedendum (cos a)))
+                 (ly (* r-dedendum (sin a)))
+                 (gx (- (* lx ca) (* ly sa)))
+                 (gy (+ (* lx sa) (* ly ca))))
+            (setf profile (append profile (list (list gx gy))))))
+        ;; フランク（遷移は root→flank, flank→root の接続で暗黙的に生まれる）
+        (dolist (pt single-flank)
+          (let* ((px (nth 0 pt)) (py (nth 1 pt))
+                 (gx (- (* px ca) (* py sa)))
+                 (gy (+ (* px sa) (* py ca))))
+            (setf profile (append profile (list (list gx gy))))))))
+    profile))
+
+;;; --- メインパーツ定義 ---
+
+(defpart bevel-gear
+  "JIS B 1704 準拠のストレートかさ歯車。
+
+   PARAMS:
+     module         : モジュール (外端基準, mm)
+     teeth          : 歯数
+     face-width     : 歯幅 (円錐母線方向, mm)
+     pressure-angle : 圧力角 (rad, デフォルト 20°)
+     cone-angle     : ピッチ円錐角 (rad, デフォルト 45°)
+     bore           : 中心穴径 (0 で穴なし)
+
+   使用例:
+     (bevel-gear :module 2 :teeth 20 :face-width 10)"
+
+  :meta (:category :power-transmission
+         :standard "JIS B 1704"
+         :material :steel
+         :description "ストレートかさ歯車")
+
+  :params ((module :: float :default 2.0 :doc "モジュール (mm)")
+           (teeth :: float :default 20.0 :doc "歯数")
+           (face-width :: length :default 10.0 :doc "歯幅 (mm)")
+           (pressure-angle :: float :default 0.3491 :doc "圧力角 (rad)")
+           (cone-angle :: float :default 0.7854 :doc "ピッチ円錐角 (rad)")
+           (bore :: length :default 0.0 :doc "中心穴径 (mm)"))
+
+  :faces ((:back "背面"))
+  :axes ((:center "中心軸"))
+
+  :body
+  (let* (;; 外端寸法
+         (r-pitch-outer (/ (* module teeth) 2.0))
+         (r-base-outer (* r-pitch-outer (cos pressure-angle)))
+         (r-addendum-outer (+ r-pitch-outer module))
+         (r-dedendum-outer (- r-pitch-outer (* 1.25 module)))
+         (tooth-pitch (/ (* 2.0 pi) teeth))
+
+         ;; 円錐距離
+         (cone-dist (/ r-pitch-outer (sin cone-angle)))
+
+         ;; 内端スケール
+         (inner-scale (max (/ (- cone-dist face-width) cone-dist) 0.3))
+
+         ;; 内端寸法
+         (r-base-inner (* r-base-outer inner-scale))
+         (r-addendum-inner (* r-addendum-outer inner-scale))
+         (r-dedendum-inner (* r-dedendum-outer inner-scale))
+
+         ;; 歯厚半角
+         (inv-alpha (- (tan pressure-angle) pressure-angle))
+         (half-thick-angle (/ (+ (/ pi teeth) (* 2.0 inv-alpha)) 2.0))
+
+         ;; プロファイル生成
+         (outer-profile (build-bevel-ring r-base-outer r-dedendum-outer
+                                           r-addendum-outer half-thick-angle
+                                           tooth-pitch teeth 6))
+         (inner-profile (build-bevel-ring r-base-inner r-dedendum-inner
+                                           r-addendum-inner half-thick-angle
+                                           tooth-pitch teeth 6))
+
+         ;; Z高さ
+         (z-height (* face-width (cos cone-angle)))
+
+         ;; loft
+         (gear-body (loft :profiles (list outer-profile inner-profile)
+                          :at (list 0.0 z-height))))
+
+    ;; 中心穴
+    (if (> bore 0.0)
+        (difference gear-body
+                   (cylinder :radius (/ bore 2.0) :height (+ z-height 2.0)))
+        gear-body)))
+
+(export bevel-gear)

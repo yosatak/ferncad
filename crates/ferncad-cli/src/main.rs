@@ -149,8 +149,8 @@ fn main() {
     if let Some(path) = step_output {
         let mut evaluator = ferncad_core::evaluator::Evaluator::new();
         match evaluator.eval_source(&source) {
-            Ok(ferncad_core::types::Value::Shape(node)) => {
-                match ferncad_cad::step::export_step_bytes(&node) {
+            Ok(ferncad_core::types::Value::Shape(tracked)) => {
+                match ferncad_cad::step::export_step_bytes(&tracked.node) {
                     Ok(bytes) => {
                         fs::write(&path, &bytes).unwrap_or_else(|e| {
                             eprintln!("error: cannot write {path}: {e}");

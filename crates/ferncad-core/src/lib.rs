@@ -4,6 +4,7 @@
 //! A pure Rust library with no WASM dependencies.
 
 pub mod assembly;
+pub mod completion;
 pub mod env;
 pub mod error;
 pub mod evaluator;
