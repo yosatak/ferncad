@@ -5,22 +5,8 @@
  * Communicates with the main thread via a typed postMessage protocol.
  */
 
-import { CreateMLCEngine, type MLCEngine, type ChatCompletionMessageParam } from '@mlc-ai/web-llm';
-
-// ── Message protocol ────────────────────────────────────────────────
-
-export type WorkerRequest =
-  | { type: 'init'; modelId: string }
-  | { type: 'generate'; messages: ChatCompletionMessageParam[]; requestId: string }
-  | { type: 'abort'; requestId: string };
-
-export type WorkerResponse =
-  | { type: 'init-progress'; progress: number; text: string }
-  | { type: 'init-done' }
-  | { type: 'init-error'; error: string }
-  | { type: 'token'; requestId: string; token: string }
-  | { type: 'done'; requestId: string; fullText: string }
-  | { type: 'error'; requestId: string; error: string };
+import { CreateMLCEngine, type MLCEngine } from '@mlc-ai/web-llm';
+import type { ChatMessage, WorkerRequest, WorkerResponse } from './llm-types';
 
 // ── Worker state ────────────────────────────────────────────────────
 
@@ -34,6 +20,11 @@ function post(msg: WorkerResponse): void {
 
 async function handleInit(modelId: string): Promise<void> {
   try {
+    if (typeof caches === 'undefined') {
+      throw new Error(
+        'Cache API is not available. LLM model loading requires a secure context (HTTPS or localhost).',
+      );
+    }
     engine = await CreateMLCEngine(modelId, {
       initProgressCallback: (report) => {
         post({ type: 'init-progress', progress: report.progress, text: report.text });
@@ -46,7 +37,7 @@ async function handleInit(modelId: string): Promise<void> {
 }
 
 async function handleGenerate(
-  messages: ChatCompletionMessageParam[],
+  messages: ChatMessage[],
   requestId: string,
 ): Promise<void> {
   if (!engine) {

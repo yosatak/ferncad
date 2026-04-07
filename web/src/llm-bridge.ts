@@ -5,8 +5,7 @@
  * and abort. The worker is lazily created on first init() call.
  */
 
-import type { ChatCompletionMessageParam } from '@mlc-ai/web-llm';
-import type { WorkerRequest, WorkerResponse } from './llm-worker';
+import type { ChatMessage, WorkerRequest, WorkerResponse } from './llm-types';
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;
@@ -75,7 +74,7 @@ export class LLMBridge {
   }
 
   /** Start a streaming generation. Returns a requestId for abort. */
-  generate(messages: ChatCompletionMessageParam[], callbacks: StreamCallbacks): string {
+  generate(messages: ChatMessage[], callbacks: StreamCallbacks): string {
     if (!this.worker || !this.ready) {
       callbacks.onError('LLM not initialized');
       return '';

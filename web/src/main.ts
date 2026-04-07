@@ -197,15 +197,35 @@ function switchToFile(filename: string): void {
 
 // ── Main ────────────────────────────────────────────────────────────
 
+/** Update loading status and yield to let the browser paint. */
+async function setLoadingStatus(text: string): Promise<void> {
+  const el = document.getElementById('loading-status');
+  if (el) el.textContent = text;
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+}
+
+function dismissLoading(): void {
+  const overlay = document.getElementById('loading-overlay');
+  if (!overlay) return;
+  overlay.classList.add('fade-out');
+  overlay.addEventListener('transitionend', () => overlay.remove());
+}
+
 async function main(): Promise<void> {
   setStatus('Initializing...');
+  await setLoadingStatus('Initializing WASM engine...');
 
   try {
-    await Promise.all([initWasm(), initProjectDB()]);
+    const wasmPromise = initWasm().then(() => setLoadingStatus('Loading project database...'));
+    const dbPromise = initProjectDB();
+    await Promise.all([wasmPromise, dbPromise]);
   } catch (e) {
+    setLoadingStatus(`Error: ${e}`);
     setStatus(`Init error: ${e}`, 'error');
     return;
   }
+
+  await setLoadingStatus('Loading project...');
 
   // Migrate from localStorage if needed
   const migratedId = await migrateFromLocalStorage();
@@ -312,6 +332,8 @@ async function main(): Promise<void> {
     }
   };
 
+  await setLoadingStatus('Setting up editor...');
+
   // ── Create editor ──────────────────────────────────────────────
   const editorContainer = document.getElementById('editor-container')!;
   const editor = createEditor(
@@ -355,8 +377,10 @@ async function main(): Promise<void> {
   }
 
   // Initial evaluation
+  await setLoadingStatus('Evaluating initial model...');
   runEvaluation();
   refreshSliders();
+  dismissLoading();
   setStatus('Ready', 'success');
 
   // ── Toolbar buttons ────────────────────────────────────────────

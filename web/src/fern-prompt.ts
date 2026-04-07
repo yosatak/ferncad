@@ -6,7 +6,7 @@
  * editor context / chat history to fit.
  */
 
-import type { ChatCompletionMessageParam } from '@mlc-ai/web-llm';
+import type { ChatMessage } from './llm-types';
 
 // ── System prompt ───────────────────────────────────────────────────
 
@@ -141,7 +141,7 @@ export interface ChatEntry {
 }
 
 /**
- * Build a ChatCompletionMessageParam array that fits within ~4096 tokens.
+ * Build a ChatMessage array that fits within ~4096 tokens.
  *
  * Priority order for space allocation:
  *   1. System prompt (fixed)
@@ -153,8 +153,8 @@ export function buildMessages(
   userMessage: string,
   editorContent: string,
   chatHistory: ChatEntry[],
-): ChatCompletionMessageParam[] {
-  const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+): ChatMessage[] {
+  const messages: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
 
   let usedTokens = SYSTEM_TOKENS + GENERATION_RESERVE;
 
@@ -183,7 +183,7 @@ export function buildMessages(
   usedTokens += estimateTokens(userContent);
 
   // Add chat history (newest first, then reverse)
-  const historyMessages: ChatCompletionMessageParam[] = [];
+  const historyMessages: ChatMessage[] = [];
   for (let i = chatHistory.length - 1; i >= 0; i--) {
     const entry = chatHistory[i];
     const tokens = estimateTokens(entry.content);
