@@ -10,6 +10,11 @@ function init(): void {
 
   void setupHero();
 
+  const heroEl = document.getElementById('hero');
+  if (heroEl) {
+    void import('./shader-bg').then((m) => m.setupShaderBg(heroEl));
+  }
+
   const featuresGrid = document.getElementById('features-grid');
   if (featuresGrid) {
     setupFeatures(featuresGrid);
