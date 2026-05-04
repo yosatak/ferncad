@@ -2,20 +2,20 @@ import { test, expect } from '@playwright/test';
 
 test.describe('ferncad web app', () => {
   test('loads and shows ready status', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     await expect(page.locator('#status-bar')).toContainText('triangles', {
       timeout: 10000,
     });
   });
 
   test('displays toolbar buttons', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     await expect(page.locator('#btn-evaluate')).toBeVisible();
     await expect(page.locator('#btn-export-stl')).toBeVisible();
   });
 
   test('shows error for invalid syntax', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     // Wait for WASM to initialize
     await expect(page.locator('#status-bar')).not.toContainText('Initializing', {
       timeout: 10000,
@@ -37,7 +37,7 @@ test.describe('ferncad web app', () => {
   });
 
   test('evaluates valid code and renders mesh', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     await expect(page.locator('#status-bar')).not.toContainText('Initializing', {
       timeout: 10000,
     });
@@ -56,7 +56,7 @@ test.describe('ferncad web app', () => {
   });
 
   test('canvas element exists', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app/');
     await expect(page.locator('#viewer-canvas')).toBeVisible();
   });
 });
