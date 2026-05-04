@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#252526"/>
+      <stop offset="100%" stop-color="#1e1e1e"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#2d2d2d" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)" opacity="0.5"/>
+  <g transform="translate(160 200)">
+    <g stroke="#8bc34a" stroke-width="6" fill="none" stroke-linecap="round" transform="scale(2.2)">
+      <path d="M 32 56 C 32 40, 32 24, 32 8" />
+      <path d="M 32 50 C 26 48, 22 46, 18 42" />
+      <path d="M 32 50 C 38 48, 42 46, 46 42" />
+      <path d="M 32 42 C 27 41, 23 39, 20 36" />
+      <path d="M 32 42 C 37 41, 41 39, 44 36" />
+      <path d="M 32 34 C 28 33, 25 31, 23 29" />
+      <path d="M 32 34 C 36 33, 39 31, 41 29" />
+      <path d="M 32 26 C 29 25, 27 23, 26 21" />
+      <path d="M 32 26 C 35 25, 37 23, 38 21" />
+      <path d="M 32 18 C 30 17, 29 16, 28 14" />
+      <path d="M 32 18 C 34 17, 35 16, 36 14" />
+    </g>
+  </g>
+  <g transform="translate(360 250)">
+    <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif" font-size="128" font-weight="700" fill="#8bc34a" letter-spacing="4">ferncad</text>
+    <text x="0" y="60" font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif" font-size="36" font-weight="400" fill="#d4d4d4">Lisp CAD Modeler · parametric 3D in your browser</text>
+    <text x="0" y="110" font-family="JetBrains Mono, Menlo, monospace" font-size="24" fill="#888">(spur-gear :teeth 20 :module 1.5)</text>
+  </g>
+</svg>
