@@ -761,12 +761,19 @@ mod tests {
         let mut cache = RealizeCache::new();
         let mesh1 = realize_with_cache(&shared, 16, &mut cache).unwrap();
         assert!(mesh1.triangle_count() > 0);
-        assert!(!cache.is_empty(), "cache should have an entry after first realize");
+        assert!(
+            !cache.is_empty(),
+            "cache should have an entry after first realize"
+        );
         let cache_len_after_first = cache.len();
         // Second realize should hit the cache (no new entries added)
         let mesh2 = realize_with_cache(&shared, 16, &mut cache).unwrap();
         assert_eq!(mesh1.triangle_count(), mesh2.triangle_count());
-        assert_eq!(cache.len(), cache_len_after_first, "no new cache entries on cache hit");
+        assert_eq!(
+            cache.len(),
+            cache_len_after_first,
+            "no new cache entries on cache hit"
+        );
     }
 
     #[test]
