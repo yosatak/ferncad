@@ -2,8 +2,7 @@
 /web/pkg/
 /web/node_modules/
 /web/dist/
-/web/src/lp/hero-mesh.json
-/web/src/lp/samples/
+/web/public/lp-mesh/
 *.stl
 *.step
 

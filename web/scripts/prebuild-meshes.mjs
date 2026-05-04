@@ -15,17 +15,16 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..', '..');
-const lpDir = resolve(__dirname, '..', 'src', 'lp');
+const sourcesDir = resolve(__dirname, '..', 'src', 'lp', 'sources');
+const outDir = resolve(__dirname, '..', 'public', 'lp-mesh');
 
 const TARGETS = [
-  { src: 'hero.fern',             out: 'hero-mesh.json',                 segments: 16 },
-  { src: 'sample-box.fern',       out: 'samples/box-mesh.json',          segments: 8 },
-  { src: 'sample-sphere.fern',    out: 'samples/sphere-mesh.json',       segments: 24 },
-  { src: 'sample-spur-gear.fern', out: 'samples/spur-gear-mesh.json',    segments: 20 },
-  { src: 'sample-boolean.fern',   out: 'samples/boolean-mesh.json',      segments: 24 },
+  { src: 'hero.fern',             out: 'hero.json',                 segments: 16 },
+  { src: 'sample-box.fern',       out: 'samples/box.json',          segments: 8 },
+  { src: 'sample-sphere.fern',    out: 'samples/sphere.json',       segments: 24 },
+  { src: 'sample-spur-gear.fern', out: 'samples/spur-gear.json',    segments: 20 },
+  { src: 'sample-boolean.fern',   out: 'samples/boolean.json',      segments: 24 },
 ];
-
-const sourcesDir = resolve(lpDir, 'sources');
 
 function isUpToDate(srcPath, outPath) {
   if (!existsSync(outPath)) return false;
@@ -38,7 +37,7 @@ const force = process.argv.includes('--force');
 
 for (const target of TARGETS) {
   const src = resolve(sourcesDir, target.src);
-  const out = resolve(lpDir, target.out);
+  const out = resolve(outDir, target.out);
   mkdirSync(dirname(out), { recursive: true });
 
   if (!force && isUpToDate(src, out)) {
