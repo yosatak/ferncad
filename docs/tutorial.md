@@ -11,7 +11,8 @@ cargo build --workspace
 # Run web viewer
 cd crates/ferncad-wasm && wasm-pack build --target web
 cd web && npm install && npm run dev
-# Open http://localhost:5173
+# Landing page: http://localhost:5173/
+# Editor:       http://localhost:5173/app/
 ```
 
 ## Basic Shapes

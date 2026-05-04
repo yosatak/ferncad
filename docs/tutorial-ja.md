@@ -11,7 +11,8 @@ cargo build --workspace
 # Web ビューアの起動
 cd crates/ferncad-wasm && wasm-pack build --target web
 cd web && npm install && npm run dev
-# → http://localhost:5173 を開く
+# ランディングページ: http://localhost:5173/
+# エディタ:           http://localhost:5173/app/
 ```
 
 ## 基本形状

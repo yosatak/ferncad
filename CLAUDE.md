@@ -43,6 +43,15 @@ cd web && npm install && npm run build
 
 Dev server: `cd web && npm run dev` → `localhost:5173`
 
+- `/` — Landing page (`web/index.html`, entry `web/src/lp/main.ts`)
+- `/app/` — Editor (`web/app/index.html`, entry `web/src/main.ts`)
+
+`web/scripts/prebuild-meshes.mjs` runs as part of `npm run build` and shells
+out to `cargo run -p ferncad-cli -- ... --mesh-json` to render the LP
+hero/sample geometry into `web/public/lp-mesh/`. The output is gitignored;
+both CI and Deploy workflows have the Rust toolchain installed before
+`npm run build` so the prebuild succeeds out of the box.
+
 ## Crate Structure
 
 - `crates/ferncad-core` — Lexer (logos) / Parser (recursive descent) / Evaluator (tree-walk) / type definitions (Value, ShapeNode) — WASM-independent
