@@ -2,7 +2,23 @@
 
 ferncad — A Rust project for 3D CAD modeling with Common Lisp-inspired syntax.
 
-## Build & Test
+## Toolchain — Run via Docker
+
+ホストには Rust ツールチェイン（cargo / rustc / wasm-pack 等）が**入っていない**。すべて `ferncad-dev` Docker イメージ経由で実行すること。リポジトリ直下の `execute_docker` ヘルパー（インタラクティブシェル用）と同等の起動方法を使う：
+
+```bash
+docker run --rm -v "$(pwd)":/workspace -w /workspace ferncad-dev <command>
+```
+
+ワンショットで叩く例：
+
+```bash
+docker run --rm -v "$(pwd)":/workspace -w /workspace ferncad-dev cargo fmt --all -- --check
+docker run --rm -v "$(pwd)":/workspace -w /workspace ferncad-dev cargo clippy --workspace -- -D warnings
+docker run --rm -v "$(pwd)":/workspace -w /workspace ferncad-dev cargo test --workspace
+```
+
+## Build & Test (inside docker)
 
 ```bash
 cargo build --workspace
@@ -11,7 +27,7 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
 
-## WASM Build
+## WASM Build (inside docker)
 
 ```bash
 cd crates/ferncad-wasm && wasm-pack build --target web
