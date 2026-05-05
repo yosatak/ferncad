@@ -120,6 +120,16 @@
 
 `+`, `-`, `*`, `/`, `cos`, `sin`, `tan`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `mod`, `expt`, `floor`, `ceil`, `min`, `max`, `pi`
 
+## Angle Constructors
+
+Runtime counterparts to the `#a(N :deg)` reader literal — useful when the
+angle is computed at runtime.
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `deg` | `(deg n)` | Interpret `n` as degrees, return radians |
+| `rad` | `(rad n)` | Pass `n` through as radians |
+
 ## Comparison & Logic
 
 `=`, `<`, `>`, `<=`, `>=`, `not`
@@ -137,6 +147,17 @@
 | `length` | `(length list)` | Number of elements |
 | `reverse` | `(reverse list)` | Reversed list |
 | `last` | `(last list)` | Last element |
+| `iota` | `(iota n)` | List `(0 1 2 ... n-1)` |
+| `assoc` | `(assoc key alist)` | First `(key . value)` pair in alist (or `nil`) |
+| `getf` | `(getf plist key [default])` | Value following `key` in plist (or `default` / `nil`) |
+| `find-if` | `(find-if pred list)` | First element where `pred` is truthy (or `nil`) |
+| `every` | `(every pred list)` | `t` if all elements satisfy `pred` |
+
+## Functional Helpers
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| `memoize` | `(memoize fn)` | Wrap `fn` so identical argument tuples return the same `Arc` — recursive shape builders share tessellation work via the realize pointer cache |
 
 ## Type Predicates
 

@@ -135,6 +135,15 @@
 
 `+`, `-`, `*`, `/`, `cos`, `sin`, `tan`, `acos`, `atan`, `atan2`, `sqrt`, `abs`, `mod`, `expt`, `floor`, `ceil`, `min`, `max`, `pi`
 
+## 角度コンストラクタ
+
+`#a(N :deg)` リテラルの実行時版。実行時に計算した角度値を `:angle` 等に渡すときに使う。
+
+| 関数 | 引数 | 説明 |
+|------|------|------|
+| `deg` | `(deg n)` | `n` を度として解釈し、ラジアンを返す |
+| `rad` | `(rad n)` | `n` をラジアンとしてそのまま返す |
+
 ## 比較・論理演算
 
 `=`, `<`, `>`, `<=`, `>=`, `not`
@@ -152,6 +161,17 @@
 | `length` | `(length list)` | 要素数 |
 | `reverse` | `(reverse list)` | リストを逆順に |
 | `last` | `(last list)` | 最後の要素 |
+| `iota` | `(iota n)` | リスト `(0 1 2 ... n-1)` |
+| `assoc` | `(assoc key alist)` | alist の中で car が `key` と一致する最初の対（無ければ `nil`） |
+| `getf` | `(getf plist key [default])` | plist 内で `key` の次の値（無ければ `default` か `nil`） |
+| `find-if` | `(find-if pred list)` | `pred` が真になる最初の要素（無ければ `nil`） |
+| `every` | `(every pred list)` | 全要素が `pred` を満たせば `t` |
+
+## 関数ユーティリティ
+
+| 関数 | 引数 | 説明 |
+|------|------|------|
+| `memoize` | `(memoize fn)` | 同じ引数なら同じ `Arc` を返すラッパを作る。再帰形状ビルダが realize 段階のポインタキャッシュに自動的に乗り、テッセレーションを共有できる |
 
 ## 型述語
 
