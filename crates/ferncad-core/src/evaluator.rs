@@ -11,9 +11,10 @@ use std::sync::Arc;
 use crate::env::Env;
 use crate::error::{FernError, FernResult, SourceLocation, SourceSpan};
 use crate::types::{
-    BuiltinFnDef, LambdaDef, MacroDef, ParamSpec, PartDef, PathNode, ShapeNode, TrackedShape,
-    Value, DEFAULT_SEGMENTS,
+    BuiltinFnDef, LambdaDef, MacroDef, MemoKey, MemoizedFn, ParamSpec, PartDef, PathNode,
+    ShapeNode, TrackedShape, Value, DEFAULT_SEGMENTS,
 };
+use std::sync::Mutex;
 
 /// Evaluator
 pub struct Evaluator {
@@ -135,6 +136,8 @@ impl Evaluator {
                 "mapcar" => return self.eval_mapcar(items, env),
                 "reduce" => return self.eval_reduce(items, env),
                 "remove-if" => return self.eval_remove_if(items, env),
+                "find-if" => return self.eval_find_if(items, env),
+                "every" => return self.eval_every(items, env),
                 "apply" => return self.eval_apply(items, env),
                 _ => {}
             }
@@ -162,6 +165,10 @@ impl Evaluator {
             Value::Lambda(lambda_def) => self.apply_lambda(&lambda_def, args, env),
             Value::PartDef(part_def) => self.apply_part(&part_def, args, env),
             Value::Macro(macro_def) => self.apply_macro(&macro_def, args, env),
+            Value::Memoized(mfn) => {
+                let evaluated_args = self.eval_args(args, env)?;
+                self.apply_memoized(&mfn, &evaluated_args, env)
+            }
             _ => Err(FernError::EvalError {
                 loc,
                 message: format!(
@@ -877,6 +884,68 @@ impl Evaluator {
         Ok(Value::List(results))
     }
 
+    /// Evaluate `(find-if predicate list)` — first element where predicate is truthy, or nil
+    fn eval_find_if(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`find-if` requires (find-if predicate list) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let list_val = self.eval(&items[2], env)?;
+        let list = match &list_val {
+            Value::List(l) => l,
+            Value::Nil => return Ok(Value::Nil),
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+        for item in list {
+            let test = self.apply_callable(&func, &[item.clone()], env)?;
+            if test.is_truthy() {
+                return Ok(item.clone());
+            }
+        }
+        Ok(Value::Nil)
+    }
+
+    /// Evaluate `(every predicate list)` — `t` if predicate is truthy for all elements
+    fn eval_every(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
+        let loc = SourceLocation { line: 0, col: 0 };
+        if items.len() != 3 {
+            return Err(FernError::EvalError {
+                loc,
+                message: "`every` requires (every predicate list) form".to_string(),
+            });
+        }
+        let func = self.eval(&items[1], env)?;
+        let list_val = self.eval(&items[2], env)?;
+        let list = match &list_val {
+            Value::List(l) => l,
+            Value::Nil => return Ok(Value::Bool(true)),
+            _ => {
+                return Err(FernError::TypeError {
+                    loc,
+                    expected: "list".to_string(),
+                    actual: list_val.type_name().to_string(),
+                });
+            }
+        };
+        for item in list {
+            let test = self.apply_callable(&func, &[item.clone()], env)?;
+            if !test.is_truthy() {
+                return Ok(Value::Bool(false));
+            }
+        }
+        Ok(Value::Bool(true))
+    }
+
     /// Evaluate `(apply fn args-list)` — apply function to a list of arguments
     fn eval_apply(&mut self, items: &[Value], env: &Rc<RefCell<Env>>) -> FernResult<Value> {
         let loc = SourceLocation { line: 0, col: 0 };
@@ -934,11 +1003,29 @@ impl Evaluator {
                 }
                 Ok(result)
             }
+            Value::Memoized(mfn) => self.apply_memoized(mfn, args, _env),
             _ => Err(FernError::EvalError {
                 loc,
                 message: format!("`{}` is not callable", func.type_name()),
             }),
         }
+    }
+
+    /// Cached invocation: keys on argument values, dispatches to the wrapped
+    /// callable on miss. Same key → same cached result (often the same `Arc`).
+    fn apply_memoized(
+        &mut self,
+        mfn: &Arc<MemoizedFn>,
+        args: &[Value],
+        env: &Rc<RefCell<Env>>,
+    ) -> FernResult<Value> {
+        let key: Vec<MemoKey> = args.iter().map(Value::to_memo_key).collect();
+        if let Some(hit) = mfn.cache.lock().unwrap().get(&key).cloned() {
+            return Ok(hit);
+        }
+        let result = self.apply_callable(&mfn.inner, args, env)?;
+        mfn.cache.lock().unwrap().insert(key, result.clone());
+        Ok(result)
     }
 
     /// Evaluate `(defpart name "doc" :meta (...) :params (...) :body expr)`
@@ -1811,6 +1898,18 @@ impl Evaluator {
         self.register_builtin("chamfer", builtin_chamfer);
         self.register_builtin("fillet", builtin_fillet);
         self.register_builtin("shell", builtin_shell);
+
+        // List / sequence helpers (CL-style)
+        self.register_builtin("iota", builtin_iota);
+        self.register_builtin("assoc", builtin_assoc);
+        self.register_builtin("getf", builtin_getf);
+
+        // Angle constructors (runtime counterparts of #a literals)
+        self.register_builtin("deg", builtin_deg);
+        self.register_builtin("rad", builtin_rad);
+
+        // Memoization
+        self.register_builtin("memoize", builtin_memoize);
     }
 
     /// Register a built-in function
@@ -2909,6 +3008,133 @@ fn builtin_to_rad(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
         actual: args[0].type_name().to_string(),
     })?;
     Ok(Value::Float(v))
+}
+
+/// `(deg x)` — interpret a runtime number as degrees, return radians.
+fn builtin_deg(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "deg", loc)?;
+    Ok(Value::Float(v * std::f64::consts::PI / 180.0))
+}
+
+/// `(rad x)` — pass through a runtime number already in radians.
+fn builtin_rad(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    let v = require_single_number(args, "rad", loc)?;
+    Ok(Value::Float(v))
+}
+
+/// `(iota n)` — list `(0 1 2 ... n-1)`.
+fn builtin_iota(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`iota` requires exactly one argument".to_string(),
+        });
+    }
+    let n = args[0].as_number().ok_or_else(|| FernError::TypeError {
+        loc: loc.clone(),
+        expected: "non-negative integer".to_string(),
+        actual: args[0].type_name().to_string(),
+    })?;
+    if !n.is_finite() || n < 0.0 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`iota` requires a non-negative integer".to_string(),
+        });
+    }
+    let count = n as i64;
+    Ok(Value::List((0..count).map(Value::Int).collect()))
+}
+
+/// `(assoc key alist)` — find the first cons (key . value) in alist whose car
+/// equals `key`. Returns the matching cons (as a 2-element list) or `nil`.
+fn builtin_assoc(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 2 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`assoc` requires (assoc key alist) form".to_string(),
+        });
+    }
+    let key = &args[0];
+    let alist = match &args[1] {
+        Value::List(items) => items,
+        Value::Nil => return Ok(Value::Nil),
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "list".to_string(),
+                actual: args[1].type_name().to_string(),
+            });
+        }
+    };
+    for entry in alist {
+        if let Value::List(pair) = entry {
+            if let Some(k) = pair.first() {
+                if k == key {
+                    return Ok(entry.clone());
+                }
+            }
+        }
+    }
+    Ok(Value::Nil)
+}
+
+/// `(getf plist key [default])` — look up `key` in a property list of the form
+/// `(:k1 v1 :k2 v2 ...)`. Returns the value following `key`, or `default` (or
+/// `nil`) if absent.
+fn builtin_getf(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`getf` requires (getf plist key [default]) form".to_string(),
+        });
+    }
+    let plist = match &args[0] {
+        Value::List(items) => items,
+        Value::Nil => {
+            return Ok(args.get(2).cloned().unwrap_or(Value::Nil));
+        }
+        _ => {
+            return Err(FernError::TypeError {
+                loc: loc.clone(),
+                expected: "list".to_string(),
+                actual: args[0].type_name().to_string(),
+            });
+        }
+    };
+    let key = &args[1];
+    let mut iter = plist.iter();
+    while let Some(k) = iter.next() {
+        let v = iter.next();
+        if k == key {
+            return Ok(v.cloned().unwrap_or(Value::Nil));
+        }
+    }
+    Ok(args.get(2).cloned().unwrap_or(Value::Nil))
+}
+
+/// `(memoize fn)` — wrap a callable so identical argument tuples reuse the
+/// previous result (same `Arc` for shape values), letting the realize-stage
+/// pointer cache reuse tessellation work.
+fn builtin_memoize(args: &[Value], loc: &SourceLocation) -> FernResult<Value> {
+    if args.len() != 1 {
+        return Err(FernError::EvalError {
+            loc: loc.clone(),
+            message: "`memoize` requires exactly one callable argument".to_string(),
+        });
+    }
+    match &args[0] {
+        Value::Lambda(_) | Value::BuiltinFn(_) | Value::Memoized(_) => {
+            Ok(Value::Memoized(Arc::new(MemoizedFn {
+                inner: args[0].clone(),
+                cache: Mutex::new(HashMap::new()),
+            })))
+        }
+        other => Err(FernError::TypeError {
+            loc: loc.clone(),
+            expected: "callable (lambda / builtin / memoized)".to_string(),
+            actual: other.type_name().to_string(),
+        }),
+    }
 }
 
 /// `(face instance-keyword :face-name)` -- returns a face reference
@@ -4685,5 +4911,217 @@ mod tests {
             ),
             Value::Float(60.0)
         );
+    }
+
+    #[test]
+    fn test_iota_basic() {
+        assert_eq!(
+            eval("(iota 5)"),
+            Value::List(vec![
+                Value::Int(0),
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_iota_zero() {
+        assert_eq!(eval("(iota 0)"), Value::List(vec![]));
+    }
+
+    #[test]
+    fn test_iota_negative_errors() {
+        let err = eval_err("(iota -3)");
+        matches!(err, FernError::EvalError { .. });
+    }
+
+    #[test]
+    fn test_iota_with_mapcar() {
+        assert_eq!(
+            eval("(mapcar (lambda (i) (* i i)) (iota 4))"),
+            Value::List(vec![
+                Value::Float(0.0),
+                Value::Float(1.0),
+                Value::Float(4.0),
+                Value::Float(9.0),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_deg_to_rad() {
+        // 180 deg → π
+        if let Value::Float(v) = eval("(deg 180)") {
+            assert!((v - std::f64::consts::PI).abs() < 1e-12);
+        } else {
+            panic!("`deg` should return a float");
+        }
+    }
+
+    #[test]
+    fn test_rad_passthrough() {
+        if let Value::Float(v) = eval("(rad 1.5)") {
+            assert!((v - 1.5).abs() < 1e-12);
+        } else {
+            panic!("`rad` should return a float");
+        }
+    }
+
+    #[test]
+    fn test_assoc_found() {
+        assert_eq!(
+            eval("(assoc :b (list (list :a 1) (list :b 2) (list :c 3)))"),
+            Value::List(vec![Value::Keyword("b".to_string()), Value::Float(2.0)])
+        );
+    }
+
+    #[test]
+    fn test_assoc_missing() {
+        assert_eq!(
+            eval("(assoc :z (list (list :a 1) (list :b 2)))"),
+            Value::Nil
+        );
+    }
+
+    #[test]
+    fn test_getf_found() {
+        assert_eq!(
+            eval("(getf (list :x 10 :y 20 :z 30) :y)"),
+            Value::Float(20.0)
+        );
+    }
+
+    #[test]
+    fn test_getf_missing_default() {
+        assert_eq!(eval("(getf (list :x 1) :missing 99)"), Value::Float(99.0));
+    }
+
+    #[test]
+    fn test_getf_missing_no_default_returns_nil() {
+        assert_eq!(eval("(getf (list :x 1) :missing)"), Value::Nil);
+    }
+
+    #[test]
+    fn test_find_if_first_match() {
+        assert_eq!(
+            eval("(find-if (lambda (x) (> x 5)) (list 1 3 7 9))"),
+            Value::Float(7.0)
+        );
+    }
+
+    #[test]
+    fn test_find_if_no_match() {
+        assert_eq!(
+            eval("(find-if (lambda (x) (> x 100)) (list 1 3 7))"),
+            Value::Nil
+        );
+    }
+
+    #[test]
+    fn test_every_all_match() {
+        assert_eq!(
+            eval("(every (lambda (x) (> x 0)) (list 1 2 3))"),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn test_every_one_fails() {
+        assert_eq!(
+            eval("(every (lambda (x) (> x 0)) (list 1 -2 3))"),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn test_every_empty_list_is_true() {
+        assert_eq!(eval("(every (lambda (x) nil) (list))"), Value::Bool(true));
+    }
+
+    #[test]
+    fn test_memoize_returns_same_arc_for_shape() {
+        // Two calls with the same argument must return the *same* Shape Arc so
+        // realize-stage pointer caching works.
+        let mut evaluator = Evaluator::new();
+        let result = evaluator
+            .eval_source(
+                r#"
+                (defvar make-cube
+                  (memoize (lambda (s) (cube s))))
+                (list (make-cube 5) (make-cube 5))
+                "#,
+            )
+            .unwrap();
+        let items = match result {
+            Value::List(items) => items,
+            other => panic!("expected list, got {other:?}"),
+        };
+        assert_eq!(items.len(), 2);
+        let a = match &items[0] {
+            Value::Shape(s) => Arc::as_ptr(s),
+            other => panic!("expected shape, got {other:?}"),
+        };
+        let b = match &items[1] {
+            Value::Shape(s) => Arc::as_ptr(s),
+            other => panic!("expected shape, got {other:?}"),
+        };
+        assert_eq!(a, b, "memoized calls with the same argument must share Arc");
+    }
+
+    #[test]
+    fn test_memoize_different_args_distinct() {
+        let mut evaluator = Evaluator::new();
+        let result = evaluator
+            .eval_source(
+                r#"
+                (defvar make-cube
+                  (memoize (lambda (s) (cube s))))
+                (list (make-cube 4) (make-cube 5))
+                "#,
+            )
+            .unwrap();
+        let items = match result {
+            Value::List(items) => items,
+            other => panic!("expected list, got {other:?}"),
+        };
+        let a = match &items[0] {
+            Value::Shape(s) => Arc::as_ptr(s),
+            other => panic!("expected shape, got {other:?}"),
+        };
+        let b = match &items[1] {
+            Value::Shape(s) => Arc::as_ptr(s),
+            other => panic!("expected shape, got {other:?}"),
+        };
+        assert_ne!(a, b, "different arguments must yield distinct Arcs");
+    }
+
+    #[test]
+    fn test_memoize_only_evaluates_once() {
+        // Use a counter held in a defvar mutated via setf to count invocations.
+        let mut evaluator = Evaluator::new();
+        let counter = evaluator
+            .eval_source(
+                r#"
+                (defvar *count* 0)
+                (defvar bump
+                  (memoize
+                    (lambda (x)
+                      (setf *count* (+ *count* 1))
+                      x)))
+                (bump 7) (bump 7) (bump 7)
+                *count*
+                "#,
+            )
+            .unwrap();
+        assert_eq!(counter, Value::Float(1.0));
+    }
+
+    #[test]
+    fn test_memoize_rejects_non_callable() {
+        let err = eval_err("(memoize 42)");
+        matches!(err, FernError::TypeError { .. });
     }
 }
