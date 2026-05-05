@@ -1,54 +1,55 @@
-;;; Barnsley Fern — 5 mm
-;;; IFS fractal: three affine maps applied recursively.
-;;;   f2 (main):   85 % scale,  +3 ° tilt, up 16 %   — full depth
-;;;   f3 (left):   31 % scale, +49 ° tilt, up 16 %   — depth - 2
-;;;   f4 (right):  31 % scale, -50 ° tilt, up  4 %   — depth - 2
-;;; Size cutoff at 0.08 mm prevents degenerate geometry.
+;;; Recursive Fern — namesake of ferncad.
+;;;
+;;; A single frond: a slim rachis with 13 sickle-lanceolate pinnae arranged
+;;; on alternating sides, each scaled smaller toward the tip. The pinna
+;;; builder is `memoize`'d so identical sizes share the same `Arc` — the
+;;; realize-stage pointer cache then reuses the tessellated mesh across
+;;; every placement that `mapcar` produces.
+;;;
+;;; Swap the cylindrical rachis for `(sweep :path (bezier ...))` for an
+;;; arched stalk; the BSP-union pass then runs noticeably longer.
 
 (defvar *resolution* 12)
 
-;; ── pinna ──────────────────────────────────────────────────
-;; A single leaflet: slim teardrop standing along Z.
-(defun pinna (len)
-  (let* ((w (* len 0.35))
-         (profile (polygon (list 0 0)
-                           (list w         (* len 0.3))
-                           (list (* w 0.7) (* len 0.7))
-                           (list 0           len)
-                           (list (* w -0.7) (* len 0.7))
-                           (list (- w)       (* len 0.3)))))
-    (rotate :shape (extrude :profile profile :height (* len 0.025))
-            :axis :x :angle #a(90 :deg))))
+;; ── pinna: sickle-lanceolate leaflet of unit length ──────────
+(defvar pinna
+  (memoize
+    (lambda (len)
+      (let* ((w (* len 0.18))
+             (profile (polygon (list 0 0)
+                               (list w               (* len 0.20))
+                               (list (* w 0.6)       (* len 0.55))
+                               (list (* w 0.15)      len)
+                               (list 0               (* len 0.95))
+                               (list (* w -0.4)      (* len 0.50)))))
+        (rotate :shape (extrude :profile profile :height (* len 0.04))
+                :axis :x :angle #a(90 :deg))))))
 
-;; ── barnsley ───────────────────────────────────────────────
-;; Recursive IFS fern.
-;;   Main branch gets full depth; side branches get (depth - 2)
-;;   to keep the tree manageable while preserving self-similarity.
-(defun barnsley (depth size)
-  (if (or (<= depth 0) (< size 0.08))
-    (pinna (max size 0.08))
-    (let* ((seg (* size 0.16))
-           (side-depth (max 0 (- depth 2)))
-           ;; f1 — stem segment
-           (stem (translate :shape (cylinder :radius (* size 0.007)
-                                             :height seg)
-                            :by (list 0 0 (/ seg 2))))
-           ;; f2 — main continuation (85 %, slight tilt)
-           (f2 (translate
-                 :shape (rotate :shape (barnsley (- depth 1) (* size 0.85))
-                                :axis :y :angle #a(2.7 :deg))
-                 :by (list 0 0 seg)))
-           ;; f3 — left branch (31 %, 49° outward)
-           (f3 (translate
-                 :shape (rotate :shape (barnsley side-depth (* size 0.31))
-                                :axis :y :angle #a(49 :deg))
-                 :by (list 0 0 seg)))
-           ;; f4 — right branch (31 %, -50° outward, lower attach)
-           (f4 (translate
-                 :shape (rotate :shape (barnsley side-depth (* size 0.31))
-                                :axis :y :angle #a(-50 :deg))
-                 :by (list 0 0 (* size 0.044)))))
-      (union stem f2 f3 f4))))
+;; ── rachis: a straight cylinder along Z ──
+(defun rachis (len thick)
+  (translate :shape (cylinder :radius thick :height len)
+             :by (list 0.0 0.0 (/ len 2.0))))
 
-;; 5 mm tall, 7 levels of self-similarity on the main axis
-(barnsley 7 5.0)
+;; ── placement plist: alternating sides, scaled smaller toward tip ──
+(defun pinna-placements (n len)
+  (mapcar (lambda (i)
+            (let* ((tt   (/ (+ i 1.0) (+ n 1.0)))
+                   (side (if (= (mod i 2) 0) 1.0 -1.0)))
+              (list :z     (* tt len 0.92)
+                    :angle (deg (* side (- 70.0 (* tt 30.0))))
+                    :scale (* (- 1.0 (* tt 0.55)) (* len 0.18)))))
+          (iota n)))
+
+;; ── place a single shape according to one plist ──
+(defun place-one (shape p)
+  (translate
+    :shape (rotate :shape (scale :shape shape :factor (getf p :scale))
+                   :axis :y :angle (getf p :angle))
+    :by (list 0.0 0.0 (getf p :z))))
+
+(rotate
+  :shape (union (rachis 12.0 0.14)
+                (apply union
+                  (mapcar (lambda (p) (place-one (pinna 1.0) p))
+                          (pinna-placements 13 12.0))))
+  :axis :y :angle #a(-15 :deg))

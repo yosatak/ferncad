@@ -24,6 +24,7 @@ const TARGETS = [
   { src: 'sample-sphere.fern',    out: 'samples/sphere.json',       segments: 24 },
   { src: 'sample-spur-gear.fern', out: 'samples/spur-gear.json',    segments: 20 },
   { src: 'sample-boolean.fern',   out: 'samples/boolean.json',      segments: 24 },
+  { src: 'fern.fern',             out: 'samples/fern.json',         segments: 12 },
 ];
 
 function isUpToDate(srcPath, outPath) {

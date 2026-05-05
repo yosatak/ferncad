@@ -42,6 +42,29 @@ const SAMPLES: Sample[] = [
     code: '(difference\n  (box :width 24 :depth 24 :height 24)\n  (sphere :radius 14))',
     meshUrl: '/lp-mesh/samples/boolean.json',
   },
+  {
+    id: 'fern',
+    label: 'fern',
+    code: [
+      ';; namesake of ferncad — every (pinna 1.0) returns the same Arc',
+      '(defvar pinna',
+      '  (memoize (lambda (len) ...)))',
+      '',
+      '(defun pinna-placements (n len)',
+      '  (mapcar (lambda (i)',
+      '            (let* ((tt (/ (+ i 1.0) (+ n 1.0))))',
+      '              (list :z     (* tt len 0.92)',
+      '                    :angle (deg ...)',
+      '                    :scale ...)))',
+      '          (iota n)))',
+      '',
+      '(union (rachis 12.0 0.14)',
+      '       (apply union',
+      '         (mapcar (lambda (p) (place-one (pinna 1.0) p))',
+      '                 (pinna-placements 13 12.0))))',
+    ].join('\n'),
+    meshUrl: '/lp-mesh/samples/fern.json',
+  },
 ];
 
 const meshCache = new Map<string, Promise<MeshDoc | null>>();
