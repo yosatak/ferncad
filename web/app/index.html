@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ferncad — Lisp CAD Modeler</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <h1>ferncad</h1>
+      <div id="toolbar-actions">
+        <button id="btn-evaluate" title="Evaluate (Ctrl+Enter)">▶ Run</button>
+        <button id="btn-export-stl" title="Export STL">STL</button>
+        <button id="btn-export-step" title="Export STEP (exact geometry)">STEP</button>
+        <button id="btn-new-project" title="New project">New</button>
+        <button id="btn-save" title="Save project">Save</button>
+        <button id="btn-load" title="Open project">Open</button>
+        <button id="btn-ai" title="AI Assistant (Ctrl+L)">AI</button>
+      </div>
+    </header>
+    <main id="workspace">
+      <div id="file-explorer"></div>
+      <div id="editor-panel">
+        <div id="tab-bar"></div>
+        <div id="editor-container"></div>
+        <div id="status-bar"></div>
+      </div>
+      <div id="resize-handle"></div>
+      <div id="viewer-panel">
+        <div id="assembly-tree"></div>
+        <div id="param-panel" class="hidden"></div>
+        <canvas id="viewer-canvas"></canvas>
+      </div>
+    </main>
+  </div>
+  <div id="loading-overlay">
+    <div id="loading-modal">
+      <div id="loading-spinner"></div>
+      <div id="loading-title">ferncad</div>
+      <div id="loading-status">Loading...</div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

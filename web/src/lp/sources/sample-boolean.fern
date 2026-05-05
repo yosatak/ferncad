@@ -1,0 +1,3 @@
+(difference
+  (box :width 24 :depth 24 :height 24)
+  (sphere :radius 14))

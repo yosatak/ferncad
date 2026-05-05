@@ -1,0 +1,14 @@
+:root {
+  --brand: #8bc34a;
+  --bg: #1e1e1e;
+  --bg-panel: #252526;
+  --bg-elev: #2d2d2d;
+  --border: #3e3e3e;
+  --border-strong: #555;
+  --text: #d4d4d4;
+  --text-mute: #888;
+  --text-faint: #666;
+  --accent-blue: #569cd6;
+  --accent-blue-hover: #6cb0f0;
+  --error: #f44747;
+}

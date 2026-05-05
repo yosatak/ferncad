@@ -44,7 +44,7 @@ const highlightField = StateField.define<DecorationSet>({
 });
 
 /** ferncad language StreamLanguage definition */
-const fernLanguage = StreamLanguage.define({
+export const fernLanguage = StreamLanguage.define({
   startState() {
     return { depth: 0 };
   },
@@ -85,7 +85,7 @@ const fernLanguage = StreamLanguage.define({
 });
 
 /** Dark theme syntax highlighting */
-const fernHighlightStyle = HighlightStyle.define([
+export const fernHighlightStyle = HighlightStyle.define([
   { tag: tags.lineComment, color: '#6a9955' },
   { tag: tags.string, color: '#ce9178' },
   { tag: tags.number, color: '#b5cea8' },
@@ -102,7 +102,7 @@ const fernHighlightStyle = HighlightStyle.define([
 ]);
 
 /** Dark theme */
-const darkTheme = EditorView.theme({
+export const darkTheme = EditorView.theme({
   '&': { backgroundColor: '#1e1e1e', color: '#d4d4d4' },
   '.cm-content': {
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",

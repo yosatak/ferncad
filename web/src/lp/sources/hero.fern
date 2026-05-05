@@ -1,0 +1,3 @@
+;; Hero scene — a JIS spur gear, large enough to feel substantial in the canvas.
+(require :ferncad-std/spur-gear)
+(spur-gear :module 2.0 :teeth 22 :face-width 8.0 :bore 6.0)

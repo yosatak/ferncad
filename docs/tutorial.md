@@ -11,7 +11,8 @@ cargo build --workspace
 # Run web viewer
 cd crates/ferncad-wasm && wasm-pack build --target web
 cd web && npm install && npm run dev
-# Open http://localhost:5173
+# Landing page: http://localhost:5173/
+# Editor:       http://localhost:5173/app/
 ```
 
 ## Basic Shapes
@@ -222,6 +223,39 @@ Higher values produce smoother meshes but take longer to compute. Recommended:
 - `16` — fast preview
 - `32` — standard quality
 - `64+` — 3D printing
+
+## Recursive Shape Builders with `memoize`
+
+ferncad caches tessellated meshes by `Arc<ShapeNode>` pointer identity at
+realize time. Two `translate`s referring to the **same** shape value share
+the underlying triangle work — different `Arc`s do not. `memoize` wraps a
+shape builder so identical arguments return the same `Arc`, letting you
+write recursive structures without manual sharing:
+
+```lisp
+;; pinna(size) tessellates only once per distinct size
+(defvar pinna
+  (memoize
+    (lambda (len)
+      (extrude :profile (polygon (list 0 0) (list len 0) (list 0 len))
+               :height (* len 0.1)))))
+
+;; Multiple calls with the same size reuse the cached Arc
+(union (pinna 1.0) (translate :shape (pinna 1.0) :by #v(2 0 0)))
+```
+
+`memoize` rejects non-callables and works with `lambda`, `defun` results,
+and other memoized callables. Make sure the wrapped function is pure —
+side effects fire only on the first call.
+
+`iota` plus `mapcar` is the standard way to drive index-based placement:
+
+```lisp
+(mapcar (lambda (i)
+          (translate :shape (sphere :radius 1)
+                     :by (list (* i 3) 0 0)))
+        (iota 6))   ; → 6 spheres along X
+```
 
 ## Macros
 

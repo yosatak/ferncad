@@ -3,45 +3,94 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ferncad — Lisp CAD Modeler</title>
-  <link rel="stylesheet" href="/src/style.css" />
+  <title data-i18n="meta.title">ferncad — Lisp CAD Modeler</title>
+  <meta name="description" data-i18n-attr="content" data-i18n="meta.description"
+        content="ferncad is a 3D CAD modeler with a Common Lisp-inspired language. Author parametric models in your browser and export to STL or STEP." />
+  <meta name="theme-color" content="#1e1e1e" />
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://ferncad.dev/" />
+  <meta property="og:title" content="ferncad — Lisp CAD Modeler" />
+  <meta property="og:description" content="A 3D CAD modeler with a Common Lisp-inspired language. Parametric, in-browser, exports STL/STEP." />
+  <meta property="og:image" content="https://ferncad.dev/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" />
+
+  <link rel="stylesheet" href="/src/theme.css" />
+  <link rel="stylesheet" href="/src/lp/style.css" />
 </head>
 <body>
-  <div id="app">
-    <header id="toolbar">
-      <h1>ferncad</h1>
-      <div id="toolbar-actions">
-        <button id="btn-evaluate" title="Evaluate (Ctrl+Enter)">▶ Run</button>
-        <button id="btn-export-stl" title="Export STL">STL</button>
-        <button id="btn-export-step" title="Export STEP (exact geometry)">STEP</button>
-        <button id="btn-new-project" title="New project">New</button>
-        <button id="btn-save" title="Save project">Save</button>
-        <button id="btn-load" title="Open project">Open</button>
-        <button id="btn-ai" title="AI Assistant (Ctrl+L)">AI</button>
+  <header class="lp-header">
+    <a href="/" class="lp-brand">
+      <img src="/favicon.svg" alt="" width="28" height="28" aria-hidden="true" />
+      <span>ferncad</span>
+    </a>
+    <nav class="lp-nav">
+      <a href="#features" data-i18n="nav.features">Features</a>
+      <a href="#samples" data-i18n="nav.samples">Examples</a>
+      <a href="https://github.com/yosatak/ferncad" target="_blank" rel="noopener">GitHub</a>
+      <button id="lang-toggle" class="lp-lang" aria-label="Toggle language">EN</button>
+      <a href="/app/" class="lp-cta-mini" data-i18n="nav.try">Try it →</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="hero" class="lp-hero">
+      <div class="lp-hero-inner">
+        <h1 class="lp-hero-title" data-i18n="hero.title">3D CAD, written in Lisp.</h1>
+        <p class="lp-hero-sub" data-i18n="hero.sub">A parametric modeler with a Common Lisp-inspired language. Runs in your browser, exports STL and STEP.</p>
+        <div class="lp-hero-cta">
+          <a href="/app/" class="lp-cta-primary" data-i18n="hero.cta">Try in browser</a>
+          <a href="https://github.com/yosatak/ferncad" class="lp-cta-secondary" target="_blank" rel="noopener" data-i18n="hero.github">View on GitHub</a>
+        </div>
       </div>
-    </header>
-    <main id="workspace">
-      <div id="file-explorer"></div>
-      <div id="editor-panel">
-        <div id="tab-bar"></div>
-        <div id="editor-container"></div>
-        <div id="status-bar"></div>
+      <div class="lp-hero-stage">
+        <pre id="hero-typewriter" class="lp-hero-code" aria-hidden="true"></pre>
+        <canvas id="hero-canvas" aria-label="Animated 3D preview of a ferncad model"></canvas>
+        <button id="hero-skip" class="lp-hero-skip" data-i18n="hero.skip" aria-label="Skip intro animation">skip ›</button>
       </div>
-      <div id="resize-handle"></div>
-      <div id="viewer-panel">
-        <div id="assembly-tree"></div>
-        <div id="param-panel" class="hidden"></div>
-        <canvas id="viewer-canvas"></canvas>
+    </section>
+
+    <section id="features" class="lp-features">
+      <h2 data-i18n="features.heading">Why ferncad</h2>
+      <div id="features-grid" class="lp-features-grid"></div>
+    </section>
+
+    <section id="samples" class="lp-samples">
+      <h2 data-i18n="samples.heading">See it in action</h2>
+      <div id="samples-root" class="lp-samples-root"></div>
+    </section>
+
+    <footer class="lp-footer">
+      <div class="lp-footer-cols">
+        <div>
+          <strong>ferncad</strong>
+          <p data-i18n="footer.tagline">Open source · MIT licensed</p>
+        </div>
+        <div>
+          <h4 data-i18n="footer.docs">Docs</h4>
+          <a href="https://github.com/yosatak/ferncad/blob/main/docs/tutorial.md" target="_blank" rel="noopener">Tutorial</a>
+          <a href="https://github.com/yosatak/ferncad/blob/main/docs/reference.md" target="_blank" rel="noopener">Reference</a>
+        </div>
+        <div>
+          <h4 data-i18n="footer.code">Code</h4>
+          <a href="https://github.com/yosatak/ferncad" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/yosatak/ferncad/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issues</a>
+        </div>
+        <div>
+          <h4 data-i18n="footer.try">Try it</h4>
+          <a href="/app/" data-i18n="footer.editor">Open editor</a>
+        </div>
       </div>
-    </main>
-  </div>
-  <div id="loading-overlay">
-    <div id="loading-modal">
-      <div id="loading-spinner"></div>
-      <div id="loading-title">ferncad</div>
-      <div id="loading-status">Loading...</div>
-    </div>
-  </div>
-  <script type="module" src="/src/main.ts"></script>
+    </footer>
+  </main>
+
+  <script type="module" src="/src/lp/main.ts"></script>
 </body>
 </html>

@@ -43,6 +43,15 @@ cd web && npm install && npm run build
 
 Dev server: `cd web && npm run dev` → `localhost:5173`
 
+- `/` — Landing page (`web/index.html`, entry `web/src/lp/main.ts`)
+- `/app/` — Editor (`web/app/index.html`, entry `web/src/main.ts`)
+
+`web/scripts/prebuild-meshes.mjs` runs as part of `npm run build` and shells
+out to `cargo run -p ferncad-cli -- ... --mesh-json` to render the LP
+hero/sample geometry into `web/public/lp-mesh/`. The output is gitignored;
+both CI and Deploy workflows have the Rust toolchain installed before
+`npm run build` so the prebuild succeeds out of the box.
+
 ## Crate Structure
 
 - `crates/ferncad-core` — Lexer (logos) / Parser (recursive descent) / Evaluator (tree-walk) / type definitions (Value, ShapeNode) — WASM-independent
@@ -76,6 +85,7 @@ Dev server: `cd web && npm run dev` → `localhost:5173`
 - **歯車プロファイルの走査方向**: CCW（反時計回り）走査が前提。1歯のプロファイルは「左フランク(負角度, 下→上) → 歯先 → 右フランク(正角度, 上→下)」の順。逆にすると歯底円弧と歯の接続点が歯の反対側にジャンプし斜め歯になる
 - **歯底-ベース円の遷移**: インボリュート曲線はベース円 (r_base) から始まるが、歯底円 (r_dedendum) はベース円より小さい場合がある。遷移は歯底円弧の最終点 (r_ded) → フランク先頭 (r_base) の直接接続で暗黙的に生まれるため、明示的な遷移ポイントを追加してはならない。追加すると同一座標の重複頂点が生まれ、ear-clipping やBREP テッセレーションで歪みが発生する
 - **realize パイプライン**: `realize()` は BREP 経路を優先する。BREP テッセレーションは元のポリゴン頂点とは異なるメッシュを生成するため、メッシュ頂点のインデックスで元ポリゴンを復元しようとしてはならない。プロファイル検証にはangular binningでの radial profile を使う
+- **再帰形状の Arc 共有**: realize は `Arc<ShapeNode>` のポインタ同一性でメッシュをキャッシュする。`(defvar +leaf+ (pinna 1))` のように 1 度束縛して複数箇所で使うか、`(memoize fn)` でラップすると同じ引数の呼び出しが同じ `Arc` を返し、自動的にキャッシュに乗る。再帰呼び出し `(barnsley (- d 1) ...)` は構造が同じでも別 Arc になるので、共有したいときは memoize する
 
 ## Decision Priority
 

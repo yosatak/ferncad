@@ -11,7 +11,8 @@ cargo build --workspace
 # Web ビューアの起動
 cd crates/ferncad-wasm && wasm-pack build --target web
 cd web && npm install && npm run dev
-# → http://localhost:5173 を開く
+# ランディングページ: http://localhost:5173/
+# エディタ:           http://localhost:5173/app/
 ```
 
 ## 基本形状
@@ -243,6 +244,37 @@ ferncad model.fern --segments 64 --stl output.stl
 | `16` | 高速プレビュー |
 | `32` | 標準品質 |
 | `64` 以上 | 3Dプリント向け |
+
+## `memoize` で再帰形状を共有
+
+ferncad は realize 段階で `Arc<ShapeNode>` のポインタ同一性をキーにメッシュをキャッシュします。
+同じ shape 値を複数の `translate` に渡すと内部の三角形分割は 1 度で済みますが、構造的に
+同じでも別の `Arc` だと別計算になります。`memoize` は形状ビルダをラップして「同じ引数なら同じ
+`Arc`」を返すので、再帰サンプルが共有を意識せずに書けます。
+
+```lisp
+;; pinna(size) は同じ size に対して 1 度だけテッセレーションされる
+(defvar pinna
+  (memoize
+    (lambda (len)
+      (extrude :profile (polygon (list 0 0) (list len 0) (list 0 len))
+               :height (* len 0.1)))))
+
+;; 同じサイズで何度呼んでも同じ Arc が返る
+(union (pinna 1.0) (translate :shape (pinna 1.0) :by #v(2 0 0)))
+```
+
+`memoize` の対象はラムダ・`defun` の結果・別の memoize 結果（callable 全般）です。
+ラップする関数は副作用を持たないこと（最初の呼び出し以外では実行されない）。
+
+`iota` と `mapcar` の組み合わせは「インデックス駆動」の配置を書くイディオムです：
+
+```lisp
+(mapcar (lambda (i)
+          (translate :shape (sphere :radius 1)
+                     :by (list (* i 3) 0 0)))
+        (iota 6))   ; → X 軸に 6 個の球を並べる
+```
 
 ## マクロ
 

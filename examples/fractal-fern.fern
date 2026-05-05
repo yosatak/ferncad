@@ -1,54 +1,81 @@
-;;; Barnsley Fern — 5 mm
-;;; IFS fractal: three affine maps applied recursively.
-;;;   f2 (main):   85 % scale,  +3 ° tilt, up 16 %   — full depth
-;;;   f3 (left):   31 % scale, +49 ° tilt, up 16 %   — depth - 2
-;;;   f4 (right):  31 % scale, -50 ° tilt, up  4 %   — depth - 2
-;;; Size cutoff at 0.08 mm prevents degenerate geometry.
+;;; Recursive Fern — namesake of ferncad.
+;;;
+;;; A flat, botanical-illustration-style frond: a slim straight rachis
+;;; with 13 pinnatifid pinnae arranged on alternating sides, scaled
+;;; smaller toward the tip. Everything lives in the XZ plane so the
+;;; silhouette reads as a single fern leaf when viewed from +Y.
+;;;
+;;; The pinna builder is `memoize`'d so every (pinna 1.0) call returns
+;;; the same Arc — the realize-stage pointer cache then reuses the
+;;; tessellated leaf mesh across every placement that `mapcar` produces.
 
 (defvar *resolution* 12)
 
-;; ── pinna ──────────────────────────────────────────────────
-;; A single leaflet: slim teardrop standing along Z.
-(defun pinna (len)
-  (let* ((w (* len 0.35))
-         (profile (polygon (list 0 0)
-                           (list w         (* len 0.3))
-                           (list (* w 0.7) (* len 0.7))
-                           (list 0           len)
-                           (list (* w -0.7) (* len 0.7))
-                           (list (- w)       (* len 0.3)))))
-    (rotate :shape (extrude :profile profile :height (* len 0.025))
-            :axis :x :angle #a(90 :deg))))
+;; ── lobed-leaf-points: pinnatifid leaf outline of length `len`, half-width
+;;    `w`, with `n` lobes per side. Walks CW (extrude/BSP expect outward
+;;    normals from CW winding; CCW silently inverts the mesh and BSP union
+;;    drops to zero triangles): base → up the right side → tip → down the
+;;    left side → close at base. Lobes taper toward the tip.
+(defun lobed-leaf-points (len w n)
+  (let* ((bottom (list 0.0 0.0))
+         (tip    (list 0.0 len))
+         (right
+           (apply append
+             (mapcar
+               (lambda (i)
+                 (let* ((tt     (/ (+ i 0.5) n))
+                        (taper  (- 1.0 (* tt 0.45)))
+                        (lobe-x (* w taper))
+                        (lobe-y (* tt len 0.95))
+                        (ind-y  (* (/ (+ i 1.0) n) len 0.95))
+                        (ind-x  (* w taper 0.55)))
+                   (if (< i (- n 1))
+                       (list (list lobe-x lobe-y) (list ind-x ind-y))
+                       (list (list lobe-x lobe-y)))))
+               (iota n))))
+         (left
+           (reverse
+             (mapcar (lambda (p) (list (- 0.0 (nth 0 p)) (nth 1 p)))
+                     right))))
+    (append (list bottom) right (list tip) left)))
 
-;; ── barnsley ───────────────────────────────────────────────
-;; Recursive IFS fern.
-;;   Main branch gets full depth; side branches get (depth - 2)
-;;   to keep the tree manageable while preserving self-similarity.
-(defun barnsley (depth size)
-  (if (or (<= depth 0) (< size 0.08))
-    (pinna (max size 0.08))
-    (let* ((seg (* size 0.16))
-           (side-depth (max 0 (- depth 2)))
-           ;; f1 — stem segment
-           (stem (translate :shape (cylinder :radius (* size 0.007)
-                                             :height seg)
-                            :by (list 0 0 (/ seg 2))))
-           ;; f2 — main continuation (85 %, slight tilt)
-           (f2 (translate
-                 :shape (rotate :shape (barnsley (- depth 1) (* size 0.85))
-                                :axis :y :angle #a(2.7 :deg))
-                 :by (list 0 0 seg)))
-           ;; f3 — left branch (31 %, 49° outward)
-           (f3 (translate
-                 :shape (rotate :shape (barnsley side-depth (* size 0.31))
-                                :axis :y :angle #a(49 :deg))
-                 :by (list 0 0 seg)))
-           ;; f4 — right branch (31 %, -50° outward, lower attach)
-           (f4 (translate
-                 :shape (rotate :shape (barnsley side-depth (* size 0.31))
-                                :axis :y :angle #a(-50 :deg))
-                 :by (list 0 0 (* size 0.044)))))
-      (union stem f2 f3 f4))))
+;; ── pinna: lobed leaflet of unit length. Memoize keys on `len`.
+(defvar pinna
+  (memoize
+    (lambda (len)
+      (rotate :shape (extrude :profile (lobed-leaf-points len (* len 0.20) 5)
+                              :height (* len 0.04))
+              :axis :x :angle #a(90 :deg)))))
 
-;; 5 mm tall, 7 levels of self-similarity on the main axis
-(barnsley 7 5.0)
+;; ── rachis: straight thin cylinder along Z. The pinnae sit on the same Z
+;;    axis, so the leaves attach flush with the stem instead of floating
+;;    off to the side. Swap in a `sweep` of a `bezier` path for an arched
+;;    stalk; you'll then need to evaluate the curve to keep the pinnae
+;;    attached.
+(defun rachis (len thick)
+  (translate :shape (cylinder :radius thick :height len)
+             :by (list 0.0 0.0 (/ len 2.0))))
+
+;; ── placement plist: alternating sides, scaled smaller toward tip. No
+;;    Y-tilt — keep everything in the XZ plane for a planar, illustrative
+;;    silhouette.
+(defun pinna-placements (n len)
+  (mapcar (lambda (i)
+            (let* ((tt   (/ (+ i 1.0) (+ n 1.0)))
+                   (side (if (= (mod i 2) 0) 1.0 -1.0)))
+              (list :z     (* tt len 0.92)
+                    :angle (deg (* side (- 70.0 (* tt 30.0))))
+                    :scale (* (- 1.0 (* tt 0.55)) (* len 0.20)))))
+          (iota n)))
+
+;; ── place a single shape: scale → swing around Y → translate up Z. ──
+(defun place-one (shape p)
+  (translate
+    :shape (rotate :shape (scale :shape shape :factor (getf p :scale))
+                   :axis :y :angle (getf p :angle))
+    :by (list 0.0 0.0 (getf p :z))))
+
+(union (rachis 12.0 0.14)
+       (apply union
+         (mapcar (lambda (p) (place-one (pinna 1.0) p))
+                 (pinna-placements 13 12.0))))

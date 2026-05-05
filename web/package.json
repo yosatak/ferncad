@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "prebuild-meshes": "node scripts/prebuild-meshes.mjs",
+    "build": "node scripts/prebuild-meshes.mjs && tsc && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test"
   },

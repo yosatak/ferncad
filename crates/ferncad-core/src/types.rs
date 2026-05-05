@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::error::{SourceLocation, SourceSpan};
 
@@ -53,6 +53,10 @@ pub enum Value {
     Macro(Arc<MacroDef>),
     /// Path curve
     Path(Arc<PathNode>),
+    /// Memoized callable: same arguments return the same Arc, cooperating with
+    /// the realize-stage pointer-identity cache so recursive shape builders
+    /// share their tessellated output.
+    Memoized(Arc<MemoizedFn>),
 }
 
 impl Value {
@@ -118,6 +122,45 @@ impl Value {
             Value::Assembly(_) => "assembly",
             Value::Macro(_) => "macro",
             Value::Path(_) => "path",
+            Value::Memoized(_) => "memoized",
+        }
+    }
+
+    /// Project this value into a hashable key for `memoize` caches.
+    ///
+    /// Floats are keyed by bit pattern; reference-counted values (Shape, Path,
+    /// Lambda, Macro, PartDef, Assembly, Memoized) are keyed by `Arc::as_ptr`.
+    /// Built-in functions key by name.
+    pub fn to_memo_key(&self) -> MemoKey {
+        match self {
+            Value::Int(n) => MemoKey::Int(*n),
+            Value::Float(v) => MemoKey::FloatBits(v.to_bits()),
+            Value::Length(v) => MemoKey::FloatBits(v.to_bits()),
+            Value::Angle(v) => MemoKey::FloatBits(v.to_bits()),
+            Value::Bool(b) => MemoKey::Bool(*b),
+            Value::Nil => MemoKey::Nil,
+            Value::Str(s) => MemoKey::Str(s.clone()),
+            Value::Symbol(s) => MemoKey::Sym(s.clone()),
+            Value::Keyword(k) => MemoKey::Kw(k.clone()),
+            Value::Vec3(v) => MemoKey::Vec3([v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]),
+            Value::Point3(v) => MemoKey::Point3([v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]),
+            Value::List(items) => MemoKey::List(items.iter().map(Value::to_memo_key).collect()),
+            Value::Shape(s) => MemoKey::Ptr(Arc::as_ptr(s) as usize),
+            Value::Path(p) => MemoKey::Ptr(Arc::as_ptr(p) as usize),
+            Value::Lambda(l) => MemoKey::Ptr(Arc::as_ptr(l) as usize),
+            Value::Macro(m) => MemoKey::Ptr(Arc::as_ptr(m) as usize),
+            Value::PartDef(p) => MemoKey::Ptr(Arc::as_ptr(p) as usize),
+            Value::Assembly(a) => MemoKey::Ptr(Arc::as_ptr(a) as usize),
+            Value::Memoized(m) => MemoKey::Ptr(Arc::as_ptr(m) as usize),
+            Value::BuiltinFn(def) => MemoKey::Builtin(def.name.clone()),
+            Value::FaceRef(r) => MemoKey::List(vec![
+                MemoKey::Sym(r.instance_name.clone()),
+                MemoKey::Sym(r.face_name.clone()),
+            ]),
+            Value::AxisRef(r) => MemoKey::List(vec![
+                MemoKey::Sym(r.instance_name.clone()),
+                MemoKey::Sym(r.axis_name.clone()),
+            ]),
         }
     }
 }
@@ -156,6 +199,7 @@ impl fmt::Display for Value {
             Value::Assembly(a) => write!(f, "<assembly:{}>", a.name),
             Value::Macro(m) => write!(f, "<macro:{}>", m.name),
             Value::Path(_) => write!(f, "<path>"),
+            Value::Memoized(_) => write!(f, "<memoized>"),
         }
     }
 }
@@ -210,6 +254,52 @@ pub struct LambdaDef {
     pub body: Vec<Value>,
     /// Environment ID at definition time (for closures)
     pub env_id: usize,
+}
+
+/// Memoized callable: wraps another `Value` (typically a `Lambda` or
+/// `BuiltinFn`) and caches results keyed by argument values. Designed so the
+/// underlying callable's pure shape builders return the same `Arc<ShapeNode>`
+/// for identical inputs, letting the realize-stage pointer cache reuse work.
+#[derive(Debug)]
+pub struct MemoizedFn {
+    /// The wrapped callable
+    pub inner: Value,
+    /// Cache from argument-vector keys to results
+    pub cache: Mutex<HashMap<Vec<MemoKey>, Value>>,
+}
+
+/// Hashable projection of a `Value` for memoize cache keys.
+///
+/// Floats are keyed by bit pattern (so `1.0` and `1.0` collide but NaN never
+/// does). Reference-counted variants (Shape, Path, Lambda) are keyed by
+/// `Arc::as_ptr` — same Arc → same key, distinct Arcs → distinct keys, even
+/// if they were structurally equal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MemoKey {
+    /// Integer literal
+    Int(i64),
+    /// Float / Length / Angle keyed by bit pattern
+    FloatBits(u64),
+    /// Boolean
+    Bool(bool),
+    /// Nil
+    Nil,
+    /// String
+    Str(String),
+    /// Symbol name
+    Sym(String),
+    /// Keyword name
+    Kw(String),
+    /// Vec3 keyed by bit patterns
+    Vec3([u64; 3]),
+    /// Point3 keyed by bit patterns
+    Point3([u64; 3]),
+    /// Reference-counted Arc address (for Shape, Path, Lambda, etc.)
+    Ptr(usize),
+    /// Built-in function name
+    Builtin(String),
+    /// Recursive list
+    List(Vec<MemoKey>),
 }
 
 /// Macro definition
