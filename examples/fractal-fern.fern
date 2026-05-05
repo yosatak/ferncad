@@ -1,27 +1,24 @@
 ;;; Recursive Fern — namesake of ferncad.
 ;;;
-;;; A bezier-swept rachis carries 13 pinnatifid (deeply lobed) pinnae
-;;; arranged on alternating sides. The lobed silhouette is what reads as
-;;; "fern" rather than "bamboo grass": each pinna is a feathery polygon
-;;; with five mini-lobes per side, generated procedurally from `iota`.
+;;; A flat, botanical-illustration-style frond: a slim straight rachis
+;;; with 13 pinnatifid pinnae arranged on alternating sides, scaled
+;;; smaller toward the tip. Everything lives in the XZ plane so the
+;;; silhouette reads as a single fern leaf when viewed from +Y.
 ;;;
-;;; Pinna is `memoize`'d so every (pinna 1.0) call returns the same Arc;
-;;; the realize-stage pointer cache then reuses the tessellated leaf mesh
-;;; across every placement that `mapcar` produces.
+;;; The pinna builder is `memoize`'d so every (pinna 1.0) call returns
+;;; the same Arc — the realize-stage pointer cache then reuses the
+;;; tessellated leaf mesh across every placement that `mapcar` produces.
 
 (defvar *resolution* 12)
 
 ;; ── lobed-leaf-points: pinnatifid leaf outline of length `len`, half-width
-;;    `w`, with `n` lobes per side. Walks CW (which the extrude/BSP path
-;;    expects for outward-facing normals): base → up the right side → tip →
-;;    down the left side → close at base. Lobes taper toward the tip so
-;;    the leaf reads as lance-shaped overall.
+;;    `w`, with `n` lobes per side. Walks CW (extrude/BSP expect outward
+;;    normals from CW winding; CCW silently inverts the mesh and BSP union
+;;    drops to zero triangles): base → up the right side → tip → down the
+;;    left side → close at base. Lobes taper toward the tip.
 (defun lobed-leaf-points (len w n)
   (let* ((bottom (list 0.0 0.0))
          (tip    (list 0.0 len))
-         ;; Right side: lobes at +x, indents pulled in slightly. Walks base
-         ;; → tip. Taper toward tip; indent at 65% of the lobe so the edge
-         ;; reads as wavy rather than as comb teeth.
          (right
            (apply append
              (mapcar
@@ -31,23 +28,18 @@
                         (lobe-x (* w taper))
                         (lobe-y (* tt len 0.95))
                         (ind-y  (* (/ (+ i 1.0) n) len 0.95))
-                        ;; Indent rises diagonally so each lobe reads as a
-                        ;; tooth pointing forward+up, not straight out.
                         (ind-x  (* w taper 0.55)))
                    (if (< i (- n 1))
                        (list (list lobe-x lobe-y) (list ind-x ind-y))
                        (list (list lobe-x lobe-y)))))
                (iota n))))
-         ;; Left side: mirror of right, traversed in reverse so the polygon
-         ;; walks tip → base on the left.
          (left
            (reverse
              (mapcar (lambda (p) (list (- 0.0 (nth 0 p)) (nth 1 p)))
                      right))))
     (append (list bottom) right (list tip) left)))
 
-;; ── pinna: lobed leaflet of unit length. Memoize keys on `len`, so every
-;;    call with the same size returns the same Arc.
+;; ── pinna: lobed leaflet of unit length. Memoize keys on `len`.
 (defvar pinna
   (memoize
     (lambda (len)
@@ -55,39 +47,35 @@
                               :height (* len 0.04))
               :axis :x :angle #a(90 :deg)))))
 
-;; ── rachis: bezier-swept stalk that arches forward as it rises. Six-side
-;;    profile and 14 path segments keep the BSP-union pass affordable.
+;; ── rachis: straight thin cylinder along Z. The pinnae sit on the same Z
+;;    axis, so the leaves attach flush with the stem instead of floating
+;;    off to the side. Swap in a `sweep` of a `bezier` path for an arched
+;;    stalk; you'll then need to evaluate the curve to keep the pinnae
+;;    attached.
 (defun rachis (len thick)
-  (sweep :profile (circle :radius thick :segments 6)
-         :path (bezier :points (list (list 0 0 0)
-                                     (list (* len 0.10) 0 (* len 0.40))
-                                     (list (* len 0.20) 0 (* len 0.80))
-                                     (list (* len 0.30) 0 len)))
-         :segments 14))
+  (translate :shape (cylinder :radius thick :height len)
+             :by (list 0.0 0.0 (/ len 2.0))))
 
-;; ── placement plist: alternating sides, scaled smaller toward tip, with a
-;;    small forward/back roll so the leaves don't all lie in one plane.
+;; ── placement plist: alternating sides, scaled smaller toward tip. No
+;;    Y-tilt — keep everything in the XZ plane for a planar, illustrative
+;;    silhouette.
 (defun pinna-placements (n len)
   (mapcar (lambda (i)
             (let* ((tt   (/ (+ i 1.0) (+ n 1.0)))
                    (side (if (= (mod i 2) 0) 1.0 -1.0)))
               (list :z     (* tt len 0.92)
                     :angle (deg (* side (- 70.0 (* tt 30.0))))
-                    :tilt  (deg (* side 12.0))
                     :scale (* (- 1.0 (* tt 0.55)) (* len 0.20)))))
           (iota n)))
 
-;; ── place a single shape: scale → roll (X) → swing (Y) → translate up Z. ──
+;; ── place a single shape: scale → swing around Y → translate up Z. ──
 (defun place-one (shape p)
   (translate
-    :shape (rotate :shape (rotate :shape (scale :shape shape :factor (getf p :scale))
-                                  :axis :x :angle (getf p :tilt))
+    :shape (rotate :shape (scale :shape shape :factor (getf p :scale))
                    :axis :y :angle (getf p :angle))
     :by (list 0.0 0.0 (getf p :z))))
 
-(rotate
-  :shape (union (rachis 12.0 0.14)
-                (apply union
-                  (mapcar (lambda (p) (place-one (pinna 1.0) p))
-                          (pinna-placements 13 12.0))))
-  :axis :y :angle #a(-15 :deg))
+(union (rachis 12.0 0.14)
+       (apply union
+         (mapcar (lambda (p) (place-one (pinna 1.0) p))
+                 (pinna-placements 13 12.0))))
